@@ -6,6 +6,9 @@ import { pageHead, macroCard, dateNav, acts } from './common.js';
 import { searchFoods, FOODS, matchVisual } from './data.js';
 import { classify, cloudAnalyze, mergePreds, imageFeatures } from './vision.js';
 
+/* Scan result: one answer, up to three one-tap alternatives, then the picker.
+   The "See all" button only exists when there is more than one candidate, so
+   its binding is optional on purpose. */
 let viewDate = today();
 
 const groupOf = (ts) => {
