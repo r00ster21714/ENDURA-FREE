@@ -51,8 +51,66 @@ export function loadLocalModel(onStatus = () => {}) {
 export async function classify(canvas, onStatus) {
   const model = await loadLocalModel(onStatus);
   onStatus('Reading the photo…');
-  const preds = await model.classify(canvas, 10);
+  const preds = await model.classify(canvas, 15);
   return preds.map((p) => ({ label: p.className, score: p.probability }));
+}
+
+/* ---------------- coarse photo fingerprint ---------------- */
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+/**
+ * Cheap colour/texture fingerprint of the frame. Not a classifier — 5k pixels
+ * of statistics that let `matchVisual` order candidates inside a family
+ * (a golden swirled roll and a pale white loaf produce different numbers).
+ * @returns {{light:number,sat:number,warm:number,tex:number}|null}
+ */
+export function imageFeatures(canvas) {
+  try {
+    const size = 72;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    if (!g) return null;
+    g.drawImage(canvas, 0, 0, size, size);
+    const { data } = g.getImageData(0, 0, size, size);
+    const lum = new Float32Array(size * size);
+    let sumL = 0;
+    let sumS = 0;
+    let sumW = 0;
+    for (let i = 0; i < size * size; i++) {
+      const r = data[i * 4] / 255;
+      const gr = data[i * 4 + 1] / 255;
+      const b = data[i * 4 + 2] / 255;
+      const mx = Math.max(r, gr, b);
+      const mn = Math.min(r, gr, b);
+      const l = 0.2126 * r + 0.7152 * gr + 0.0722 * b;
+      lum[i] = l;
+      sumL += l;
+      sumS += mx < 0.01 ? 0 : (mx - mn) / mx;
+      sumW += r - b;
+    }
+    const n = size * size;
+    let edge = 0;
+    for (let y = 1; y < size - 1; y++) {
+      for (let x = 1; x < size - 1; x++) {
+        const i = y * size + x;
+        const gx = lum[i + 1] - lum[i - 1];
+        const gy = lum[i + size] - lum[i - size];
+        edge += Math.sqrt(gx * gx + gy * gy);
+      }
+    }
+    const edgeMean = edge / ((size - 2) * (size - 2));
+    return {
+      light: clamp01(sumL / n),
+      sat: clamp01(sumS / n),
+      warm: clamp01(0.5 + (sumW / n) * 0.9),
+      tex: clamp01(edgeMean * 7),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -81,12 +139,15 @@ export function mergePreds(lists) {
 /* ---------------- cloud estimation ---------------- */
 
 const PROMPT = `You are a nutrition estimator looking at a photo of food.
-Identify every distinct food item visible and estimate the edible portion actually shown.
+Name the dish as specifically as the photo allows, then estimate the edible portion actually shown.
 
 Rules:
+- Name the dish, not the category. "cinnamon roll", not "pastry"; "blueberry muffin", not
+  "baked good"; "sourdough toast", not "bread". Homemade dishes get named like any other.
+- If several foods are on the plate, return one item per food.
 - Estimate portion sizes from visual cues (plate, hand, utensils, packaging).
 - Return totals for the visible portion, not per 100 g.
-- If you cannot identify the food, still return your best guess with low confidence.
+- If you cannot identify the food, still return your best specific guess with low confidence.
 - Never return ranges or text instead of numbers. Numbers only, per item.
 
 Respond with STRICT JSON, no markdown, exactly this shape:

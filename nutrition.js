@@ -4,7 +4,7 @@ import {
 } from './core.js';
 import { pageHead, macroCard, dateNav, acts } from './common.js';
 import { searchFoods, FOODS, matchVisual } from './data.js';
-import { classify, cloudAnalyze, mergePreds } from './vision.js';
+import { classify, cloudAnalyze, mergePreds, imageFeatures } from './vision.js';
 
 let viewDate = today();
 
@@ -198,15 +198,22 @@ export function openScanner(ctx) {
 
           status('Loading model…');
           const crop = centerCrop(full.canvas, 0.74);
+          const tight = centerCrop(full.canvas, 0.5);
           status('Reading the photo…');
+          // Three passes: the whole frame, the plate area, and a tight centre
+          // crop for close-ups. Agreement between them raises a label's score.
           const preds = mergePreds([
             await classify(full.canvas, status),
             await classify(crop, status),
+            await classify(tight, status),
           ]);
-          const match = matchVisual(preds, state.learned);
+          const features = imageFeatures(full.canvas);
+          const match = matchVisual(preds, state.learned, features);
           busy(false);
-          if (!match.candidates.length) {
-            showNoMatch(sheetRoot, thumb.dataUrl, match, ctx);
+          // A 0.02-score guess dressed up as an answer is worse than asking.
+          const weak = !match.candidates.length || match.candidates[0].score < 0.05;
+          if (weak) {
+            showNoMatch(sheetRoot, thumb.dataUrl, match, ctx, !match.candidates.length ? 'unknown' : 'weak');
           } else {
             showCandidates(sheetRoot, match, thumb.dataUrl, ctx);
           }
@@ -239,27 +246,53 @@ function showScanError(root, message, ctx) {
   box.querySelector('[data-manual]').addEventListener('click', () => { closeSheet(); openAddFood(ctx); });
 }
 
-function showNoMatch(root, photo, match, ctx) {
+function showNoMatch(root, photo, match, ctx, reason = 'unknown') {
   const top = match.saw.join(', ');
   const box = root.querySelector('#scan-result');
   box.innerHTML = `
     <div class="card">
-      <div style="font-weight:650;font-size:14px">Not sure what that is</div>
-      <div class="tiny muted" style="margin-top:4px">The model guessed ${esc(top || 'nothing')}, which isn't in the food list. Pick it manually — the app remembers your choice for next time, and the photo isn't saved.</div>
+      <div style="font-weight:650;font-size:14px">${reason === 'weak' ? 'Not confident enough' : 'Not sure what that is'}</div>
+      <div class="tiny muted" style="margin-top:4px">${reason === 'weak'
+        ? `The model hesitated between ${esc(top || 'a few guesses')}, none strongly enough to call it. Pick it manually — the app remembers your choice for next time, and the photo isn't saved.`
+        : `The model guessed ${esc(top || 'nothing')}, which isn't in the food list. Pick it manually — the app remembers your choice for next time, and the photo isn't saved.`}</div>
       <button class="btn btn--sm btn--primary" style="margin-top:12px" data-search>Search foods</button>
     </div>`;
+  const prefill = searchHint(match.saw[0]);
   box.querySelector('[data-search]').addEventListener('click', () => {
     closeSheet();
-    openAddFood(ctx, { photo, scanLabel: match.saw[0] || null });
+    openAddFood(ctx, { photo, scanLabel: match.saw[0] || null, prefill });
   });
+}
+
+/* A generic ImageNet label is a bad search term. Point the manual search at
+   something the table actually contains instead. */
+const SEARCH_HINTS = {
+  dough: 'roll',
+  bun: 'roll',
+  bakery: 'bread',
+  confectionery: 'cake',
+  pastry: 'roll',
+  plate: '',
+  tray: '',
+  tableware: '',
+  menu: '',
+  restaurant: '',
+  'grocery store': '',
+};
+
+function searchHint(label) {
+  const key = String(label || '').toLowerCase().trim();
+  if (!key) return '';
+  return SEARCH_HINTS[key] !== undefined ? SEARCH_HINTS[key] : key;
 }
 
 /* One answer, not a quiz: name the dish, log it, and make the correction
    path obvious when the guess is wrong. */
 function showCandidates(root, match, photo, ctx) {
-  const { candidates, saw, sure } = match;
+  const { candidates, saw, sure, family } = match;
   const box = root.querySelector('#scan-result');
   const lead = candidates[0];
+  const alts = candidates.slice(1, 4);
   const scanLabel = saw[0] || null;
 
   const openFood = (food) => {
@@ -270,14 +303,22 @@ function showCandidates(root, match, photo, ctx) {
   const drawAnswer = () => {
     box.innerHTML = `
       <div style="text-align:center;padding:8px 0 0">
-        <div class="tiny muted">${sure ? 'This is' : 'Best guess'}</div>
+        <div class="tiny muted">${sure ? 'This is' : family ? `Looks like ${esc(family)} · best guess` : 'Best guess'}</div>
         <div class="scan-answer__name">${esc(lead.food.name)}</div>
         <div class="scan-answer__sub">${Math.round(lead.food.kcal)} kcal per ${lead.food.serveG} g · ${Math.round(lead.food.protein)} P / ${Math.round(lead.food.carbs)} C / ${Math.round(lead.food.fat)} F</div>
       </div>
       <button class="btn btn--primary btn--block" data-log style="margin-top:16px">Add ${esc(lead.food.name)}</button>
-      <button class="btn btn--ghost btn--sm btn--block" data-change style="margin-top:8px">Not right? Change it</button>
+      ${alts.length ? `
+        <div class="label" style="margin:14px 0 6px">Not it? One tap</div>
+        <div class="row" style="gap:6px;flex-wrap:wrap">
+          ${alts.map((c, i) => `<button class="pill" data-quick="${i}">${esc(c.food.name)}</button>`).join('')}
+        </div>` : ''}
+      ${candidates.length > 1 ? `<button class="btn btn--ghost btn--sm btn--block" data-change style="margin-top:10px">See all ${candidates.length} matches</button>` : ''}
       <div class="tiny muted" style="margin-top:10px;text-align:center">The photo isn't saved.</div>`;
     box.querySelector('[data-log]').addEventListener('click', () => openFood(lead.food));
+    box.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => {
+      openFood(alts[Number(b.dataset.quick)].food);
+    }));
     box.querySelector('[data-change]').addEventListener('click', drawPicker);
   };
 
@@ -502,7 +543,7 @@ function openPortionSheet(foodItem, ctx, { photo = null, source = 'manual', scan
 
 /* ---------------- add food ---------------- */
 
-export function openAddFood(ctx, { photo = null, scanLabel = null } = {}) {
+export function openAddFood(ctx, { photo = null, scanLabel = null, prefill = '' } = {}) {
   const recent = [...state.meals].sort((a, b) => b.ts - a.ts)
     .filter((m, i, arr) => arr.findIndex((x) => x.name === m.name) === i)
     .slice(0, 4);
@@ -556,6 +597,7 @@ export function openAddFood(ctx, { photo = null, scanLabel = null } = {}) {
       };
 
       draw(FOODS.slice(0, 12));
+      if (prefill) { q.value = prefill; draw(searchFoods(prefill)); }
       q.addEventListener('input', () => draw(searchFoods(q.value)));
       q.focus({ preventScroll: true });
 

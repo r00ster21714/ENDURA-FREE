@@ -101,7 +101,7 @@ export function render(ctx) {
 
       <div class="hint" style="margin-top:10px">
         ${cloud.provider === 'none'
-          ? 'Offline mode: a food-recognition model runs in the browser, then macros come from the built-in nutrition table. Best for single, recognisable dishes. Photos are never saved — not to the device, not anywhere.'
+          ? 'Offline mode: a food-recognition model runs in the browser, then macros come from the built-in nutrition table — dishes, baked goods and pastries included. Best for single, recognisable items. Photos are never saved — not to the device, not anywhere.'
           : 'Cloud mode: the model estimates portion and macros from the photo. More accurate for mixed plates, needs a connection. The photo is sent to the provider for that request and is not stored by the app.'}
       </div>
     </section>

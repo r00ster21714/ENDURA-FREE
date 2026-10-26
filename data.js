@@ -51,6 +51,19 @@ export const FOODS = [
   food('Bread (whole wheat)', 81, 4, 14, 1.1, 30, ['wholemeal bread', 'brown bread'], '1 slice'),
   food('Bagel', 245, 10, 48, 1.5, 98, ['bagel'], '1 bagel'),
   food('Croissant', 231, 4.7, 26, 12, 57, ['croissant'], '1 croissant'),
+  food('Cinnamon roll', 380, 5, 56, 15, 100, ['cinnamon bun', 'cinnamon swirl', 'cinnamon scroll', 'sticky bun', 'sweet roll', 'iced bun', 'cinnamon pastry'], '1 roll'),
+  food('Sourdough bread', 135, 5.2, 26, 0.9, 50, ['sourdough', 'french loaf', 'artisan bread', 'rustic bread', 'baguette', 'pan loaf'], '1 thick slice'),
+  food('Bread roll', 185, 6, 33, 3, 60, ['dinner roll', 'bread bun', 'burger bun', 'roll', 'bun', 'cob'], '1 roll'),
+  food('Danish pastry', 340, 5.4, 40, 18, 90, ['danish', 'pain au chocolat', 'cheese danish', 'viennoiserie'], '1 pastry'),
+  food('Scone', 220, 4, 32, 8, 60, ['scones', 'cream scone', 'tea biscuit'], '1 scone'),
+  food('Banana bread', 230, 3.4, 34, 9, 70, ['banana loaf', 'zucchini bread', 'pumpkin bread', 'loaf cake'], '1 slice'),
+  food('Churro', 270, 3, 30, 15, 60, ['churros'], '1 churro'),
+  food('Waffle', 218, 5.5, 25, 11, 75, ['waffles', 'belgian waffle'], '1 waffle'),
+  food('French toast', 275, 10, 28, 13, 120, ['eggy bread', 'pain perdu'], '2 slices'),
+  food('Coffee cake', 300, 4, 44, 12, 80, ['crumb cake', 'streusel cake'], '1 slice'),
+  food('Cupcake', 305, 3.4, 43, 14, 80, ['fairy cake', 'frosted cupcake'], '1 cupcake'),
+  food('Cheesecake', 321, 5.5, 25, 22, 100, ['new york cheesecake'], '1 slice'),
+  food('Pie (fruit)', 340, 3, 47, 16, 125, ['apple pie', 'pumpkin pie', 'pie', 'fruit pie', 'tart'], '1 slice'),
   food('Oats (dry)', 150, 5, 27, 3, 40, ['oatmeal', 'porridge', 'oats', 'muesli'], '40 g dry'),
   food('Granola', 471, 10, 64, 20, 100, ['cereal bar']),
   food('Cereal', 150, 3, 34, 0.6, 40, ['cornflakes', 'breakfast cereal'], '1 bowl'),
@@ -252,11 +265,14 @@ export function searchExercises(q, limit = 40) {
 /* ---------------- classifier labels → food ---------------- */
 
 /*
- * ImageNet knows "bagel" and "dough" but not "chocolate chip cookie", so a
- * confident single answer is often a lie. Two things keep it honest:
+ * ImageNet knows "bagel" and "dough" but not "cinnamon roll", so a confident
+ * single answer is often a lie. Three things keep it honest:
  *   1. strict label matching (no "dough" → "donut" substring nonsense)
  *   2. visual families: a generic baked-goods label expands to the whole
- *      bakery shelf, so the right item is on screen instead of a wrong one.
+ *      bakery shelf, so the right item is on screen instead of a wrong one
+ *   3. ordered weights inside a family: when the label is generic, the things
+ *      people actually photograph come first (a roll before a cookie), and a
+ *      coarse colour/texture fingerprint nudges the order for that photo
  */
 export const VISUAL_FAMILIES = [
   {
@@ -264,22 +280,49 @@ export const VISUAL_FAMILIES = [
     name: 'baked goods',
     triggers: ['dough', 'bagel', 'beigel', 'pretzel', 'french loaf', 'bread', 'bakery', 'bun',
       'croissant', 'waffle', 'pancake', 'muffin', 'cake', 'cookie', 'biscuit', 'pastry',
-      'doughnut', 'donut', 'toast', 'loaf', 'pita', 'focaccia', 'baguette'],
-    foods: ['Cookie', 'Brownie', 'Muffin', 'Donut', 'Bagel', 'Croissant', 'Cake (slice)',
-      'Pancakes', 'Bread (white)', 'Bread (whole wheat)'],
+      'doughnut', 'donut', 'toast', 'loaf', 'pita', 'focaccia', 'baguette', 'roll', 'scone',
+      'cinnamon', 'icing', 'frosting', 'sweet roll', 'viennoiserie', 'brioche'],
+    foods: [
+      ['Cinnamon roll', 1],
+      ['Croissant', 0.97],
+      ['Sourdough bread', 0.94],
+      ['Bread roll', 0.93],
+      ['Bagel', 0.9],
+      ['Danish pastry', 0.89],
+      ['Muffin', 0.86],
+      ['Donut', 0.85],
+      ['Cookie', 0.82],
+      ['Cake (slice)', 0.8],
+      ['Waffle', 0.78],
+      ['Pancakes', 0.76],
+      ['Scone', 0.75],
+      ['Banana bread', 0.73],
+      ['Coffee cake', 0.7],
+      ['Brownie', 0.68],
+    ],
   },
   {
     id: 'dessert',
     name: 'dessert',
     triggers: ['ice cream', 'icecream', 'gelato', 'chocolate sauce', 'trifle', 'custard',
-      'cake', 'cookie', 'brownie', 'cheesecake', 'candy', 'confectionery'],
-    foods: ['Ice cream', 'Cookie', 'Cake (slice)', 'Chocolate', 'Donut', 'Brownie'],
+      'cake', 'cookie', 'brownie', 'cheesecake', 'candy', 'confectionery', 'pastry'],
+    foods: [
+      ['Cheesecake', 1],
+      ['Cupcake', 0.96],
+      ['Pie (fruit)', 0.94],
+      ['Cake (slice)', 0.92],
+      ['Brownie', 0.9],
+      ['Cookie', 0.88],
+      ['Ice cream', 0.86],
+      ['Chocolate', 0.82],
+      ['Donut', 0.8],
+    ],
   },
   {
     id: 'fastfood',
     name: 'fast food',
     triggers: ['cheeseburger', 'hamburger', 'hot dog', 'hotdog', 'french fries', 'fries',
-      'pizza', 'burrito', 'taco', 'sandwich', 'pretzel', 'hoagie', 'grinder'],
+      'pizza', 'burrito', 'taco', 'sandwich', 'hoagie', 'grinder'],
     foods: ['Cheeseburger', 'Pizza (cheese)', 'Hot dog', 'Sandwich (deli)', 'Burrito',
       'Taco', 'French fries'],
   },
@@ -295,8 +338,8 @@ export const VISUAL_FAMILIES = [
     id: 'breakfast',
     name: 'breakfast',
     triggers: ['pancake', 'waffle', 'omelette', 'scrambled egg', 'fried egg', 'egg',
-      'bacon', 'cereal', 'oatmeal', 'granola', 'toast', 'porridge'],
-    foods: ['Pancakes', 'Egg', 'Oats (dry)', 'Cereal', 'Bacon', 'Bread (white)',
+      'bacon', 'cereal', 'oatmeal', 'granola', 'toast', 'porridge', 'french toast'],
+    foods: ['Pancakes', 'Waffle', 'French toast', 'Egg', 'Oats (dry)', 'Cereal', 'Bacon',
       'Greek yogurt'],
   },
   {
@@ -316,14 +359,81 @@ export const VISUAL_FAMILIES = [
   },
 ];
 
+/*
+ * Labels that describe the table rather than the food. They used to eat a slot
+ * in the top-3 and kill an otherwise good match, so they are skipped for
+ * matching and only shown when nothing better is on offer.
+ */
+const NON_FOOD = new Set([
+  'plate', 'plate rack', 'tray', 'cup', 'mug', 'coffee mug', 'soup bowl', 'bowl', 'tableware',
+  'dining table', 'menu', 'restaurant', 'grocery store', 'refrigerator', 'wooden spoon',
+  'spatula', 'ladle', 'frying pan', 'wok', 'pot', 'dutch oven', 'cutting board', 'napkin',
+  'packet', 'carton', 'water bottle', 'pop bottle', 'beer bottle', 'wine bottle', 'bottle',
+  'mixing bowl', 'saltshaker', 'doily', 'apron', 'table lamp', 'monitor', 'screen', 'website',
+]);
+
+/*
+ * Coarse fingerprint per food, used only to order candidates inside a family:
+ * light (0 dark .. 1 white), sat (0 grey .. 1 vivid), warm (0.5 neutral,
+ * higher = red/golden), tex (0 smooth .. 1 busy). Rough by design — it is a
+ * tie-breaker, not a classifier.
+ */
+const LOOK = {
+  'cinnamon-roll': { light: 0.5, sat: 0.42, warm: 0.66, tex: 0.5 },
+  croissant: { light: 0.57, sat: 0.48, warm: 0.68, tex: 0.55 },
+  'sourdough-bread': { light: 0.62, sat: 0.3, warm: 0.62, tex: 0.32 },
+  'bread-roll': { light: 0.6, sat: 0.32, warm: 0.62, tex: 0.3 },
+  bagel: { light: 0.52, sat: 0.36, warm: 0.63, tex: 0.36 },
+  'danish-pastry': { light: 0.56, sat: 0.42, warm: 0.66, tex: 0.48 },
+  muffin: { light: 0.4, sat: 0.4, warm: 0.63, tex: 0.46 },
+  donut: { light: 0.56, sat: 0.45, warm: 0.6, tex: 0.36 },
+  cookie: { light: 0.36, sat: 0.46, warm: 0.66, tex: 0.48 },
+  'cake-slice': { light: 0.62, sat: 0.3, warm: 0.58, tex: 0.26 },
+  waffle: { light: 0.5, sat: 0.5, warm: 0.68, tex: 0.56 },
+  pancakes: { light: 0.55, sat: 0.45, warm: 0.66, tex: 0.24 },
+  scone: { light: 0.6, sat: 0.3, warm: 0.6, tex: 0.4 },
+  'banana-bread': { light: 0.36, sat: 0.44, warm: 0.64, tex: 0.36 },
+  'coffee-cake': { light: 0.44, sat: 0.4, warm: 0.64, tex: 0.42 },
+  brownie: { light: 0.2, sat: 0.4, warm: 0.6, tex: 0.32 },
+  cheesecake: { light: 0.68, sat: 0.28, warm: 0.58, tex: 0.22 },
+  cupcake: { light: 0.55, sat: 0.42, warm: 0.6, tex: 0.34 },
+  'pie-fruit': { light: 0.46, sat: 0.48, warm: 0.66, tex: 0.44 },
+  'bread-white': { light: 0.68, sat: 0.22, warm: 0.58, tex: 0.26 },
+  'bread-whole-wheat': { light: 0.46, sat: 0.34, warm: 0.62, tex: 0.32 },
+};
+
+const LOOK_W = { light: 1, sat: 0.7, warm: 1.1, tex: 0.8 };
+
+/** 0..1 similarity between a food's fingerprint and the photo's stats. */
+export function lookAffinity(foodId, features) {
+  const look = LOOK[foodId];
+  if (!look || !features) return 1;
+  let dist = 0;
+  let total = 0;
+  for (const k of Object.keys(LOOK_W)) {
+    const a = look[k];
+    const b = features[k];
+    if (typeof a !== 'number' || typeof b !== 'number') continue;
+    dist += Math.min(1, Math.abs(a - b)) * LOOK_W[k];
+    total += LOOK_W[k];
+  }
+  return total ? 1 - dist / total : 1;
+}
+
+const nudge = (v, lo = 0.88, hi = 1.12) => Math.min(hi, Math.max(lo, v));
+
+/* Whole-word trigger test: "chambered nautilus" must not trip the "ham" trigger. */
+const hasTerm = (hay, term) => (' ' + hay + ' ').includes(' ' + term + ' ');
+
 export const matchLabels = (predictions, learned) => matchVisual(predictions, learned).candidates;
 
 /**
  * @param {Array<{label:string, score:number}>} predictions
  * @param {Record<string,{id:string,n:number}>} [learned] corrections the user made before
+ * @param {{light:number,sat:number,warm:number,tex:number}} [features] from vision.imageFeatures
  * @returns {{candidates:Array, family:string|null, saw:string[], sure:boolean}}
  */
-export function matchVisual(predictions, learned = {}) {
+export function matchVisual(predictions, learned = {}, features = null) {
   const out = new Map();
   const add = (food, score, why) => {
     const cur = out.get(food.id);
@@ -331,6 +441,7 @@ export function matchVisual(predictions, learned = {}) {
   };
 
   const familyScore = new Map();
+  const spoken = [];
 
   for (const p of predictions) {
     const score = Math.max(0, Number(p.score) || 0);
@@ -339,24 +450,44 @@ export function matchVisual(predictions, learned = {}) {
     const label = norm(raw.split(',')[0]);
     const full = norm(raw);
     if (!label) continue;
+    spoken.push(raw.split(',')[0].trim());
+    if (NON_FOOD.has(label)) continue;
 
     for (const f of FOODS) {
       const names = [norm(f.name), ...f.aliases.map(norm)];
-      if (names.some((n) => aliasMatch(label, n))) add(f, score, 'direct');
+      const hit = names.find((n) => aliasMatch(label, n));
+      if (!hit) continue;
+      // A label that *ends* in the matched term is usually the dish itself
+      // ("chocolate chip cookie" is a cookie). A label that merely contains it
+      // is weaker, so "chocolate" cannot outrank "cookie" for that photo.
+      const strong = label === hit || label.endsWith(' ' + hit);
+      add(f, score * (strong ? 1 : 0.84), 'direct');
     }
 
     for (const fam of VISUAL_FAMILIES) {
-      if (!fam.triggers.some((t) => full.includes(t) || label.includes(t))) continue;
+      if (!fam.triggers.some((t) => hasTerm(full, t) || hasTerm(label, t))) continue;
       familyScore.set(fam.id, (familyScore.get(fam.id) || 0) + score);
-      for (const name of fam.foods) {
+
+      const items = fam.foods.map((entry) => {
+        const [name, weight] = Array.isArray(entry) ? entry : [entry, 1];
         const f = FOODS.find((x) => x.name === name);
-        if (f) add(f, score * 0.72, fam.id);
-      }
+        return f ? { f, weight } : null;
+      }).filter(Boolean);
+
+      // Centre the fingerprint scores inside the family: a badly exposed photo
+      // then shifts every candidate equally instead of dragging the list wrong.
+      const aff = items.map((it) => lookAffinity(it.f.id, features));
+      const mean = aff.reduce((a, b) => a + b, 0) / (aff.length || 1);
+
+      items.forEach((it, i) => {
+        const bump = features ? nudge(1 + (aff[i] - mean) * 1.4) : 1;
+        add(it.f, score * 0.72 * it.weight * bump, fam.id);
+      });
     }
   }
 
   // A label the user already corrected wins next time. Keyed on the exact
-  // top label, so "dough" can mean cookie without touching "bagel".
+  // top label, so "dough" can mean cinnamon roll without touching "bagel".
   const topLabel = predictions.length ? norm(String(predictions[0].label || '').split(',')[0]) : '';
   const remembered = topLabel ? learned[topLabel] : null;
   if (remembered && remembered.id) {
@@ -366,16 +497,19 @@ export function matchVisual(predictions, learned = {}) {
   }
 
   const sorted = [...out.values()].sort((a, b) => b.score - a.score);
-  if (!sorted.length) return { candidates: [], family: null, saw: [], sure: false };
+  const foodWords = spoken.filter((s) => !NON_FOOD.has(norm(s)));
+  if (!sorted.length) {
+    return { candidates: [], family: null, saw: (foodWords.length ? foodWords : spoken).slice(0, 3), sure: false };
+  }
 
   const family = [...familyScore.entries()].sort((a, b) => b[1] - a[1])[0];
   const fam = family ? VISUAL_FAMILIES.find((f) => f.id === family[0]) : null;
   const direct = sorted.find((c) => c.why === 'direct');
 
   return {
-    candidates: sorted.slice(0, fam ? 6 : 4),
+    candidates: sorted.slice(0, 6),
     family: fam ? fam.name : null,
-    saw: predictions.slice(0, 3).map((p) => String(p.label || '').split(',')[0]).filter(Boolean),
+    saw: (foodWords.length ? foodWords : spoken).slice(0, 3),
     sure: !!direct && direct.score >= 0.55,
   };
 }
