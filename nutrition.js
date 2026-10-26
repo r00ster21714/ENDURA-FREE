@@ -246,7 +246,10 @@ function showScanError(root, message, ctx) {
       </div>
     </div>`;
   box.querySelector('[data-again]').addEventListener('click', () => openScanner(ctx));
-  box.querySelector('[data-manual]').addEventListener('click', () => { closeSheet(); openAddFood(ctx); });
+  box.querySelector('[data-manual]').addEventListener('click', () => {
+    closeSheet();
+    setTimeout(() => openFoodPicker(ctx, { heading: 'Pick the food' }), 40);
+  });
 }
 
 function showNoMatch(root, photo, match, ctx, reason = 'unknown') {
@@ -256,19 +259,23 @@ function showNoMatch(root, photo, match, ctx, reason = 'unknown') {
     <div class="card">
       <div style="font-weight:650;font-size:14px">${reason === 'weak' ? 'Not confident enough' : 'Not sure what that is'}</div>
       <div class="tiny muted" style="margin-top:4px">${reason === 'weak'
-        ? `The model hesitated between ${esc(top || 'a few guesses')}, none strongly enough to call it. Pick it manually — the app remembers your choice for next time, and the photo isn't saved.`
-        : `The model guessed ${esc(top || 'nothing')}, which isn't in the food list. Pick it manually — the app remembers your choice for next time, and the photo isn't saved.`}</div>
-      <button class="btn btn--sm btn--primary" style="margin-top:12px" data-search>Search foods</button>
+        ? `The model hesitated between ${esc(top || 'a few guesses')}, none strongly enough to call it. Pick the food from the list — the nutrition fills itself in, and the photo isn't saved.`
+        : `The model guessed ${esc(top || 'nothing')}, which isn't in the food list. Pick the food from the list — the nutrition fills itself in, and the photo isn't saved.`}</div>
+      <button class="btn btn--sm btn--primary" style="margin-top:12px" data-search>Pick the food</button>
     </div>`;
-  const prefill = searchHint(match.saw[0]);
+  // Only pre-fill the search when the hint actually matches a food; otherwise
+  // the picker opens on the full browsable list, which is the point.
+  const hint = searchHint(match.saw[0]);
+  const prefill = hint && searchFoods(hint, 1).length ? hint : '';
   box.querySelector('[data-search]').addEventListener('click', () => {
     closeSheet();
-    openAddFood(ctx, { photo, scanLabel: match.saw[0] || null, prefill });
+    setTimeout(() => openFoodPicker(ctx, { photo, scanLabel: match.saw[0] || null, prefill }), 40);
   });
 }
 
 /* A generic ImageNet label is a bad search term. Point the manual search at
-   something the table actually contains instead. */
+   something the table actually contains instead — and never pre-fill a term
+   that would return nothing (that just hides the browsable list). */
 const SEARCH_HINTS = {
   dough: 'roll',
   bun: 'roll',
@@ -287,6 +294,85 @@ function searchHint(label) {
   const key = String(label || '').toLowerCase().trim();
   if (!key) return '';
   return SEARCH_HINTS[key] !== undefined ? SEARCH_HINTS[key] : key;
+}
+
+/*
+ * The correction picker. A wrong guess must never turn into a form: every row
+ * already carries the table's kcal/P/C/F for that food, and the portion sheet
+ * scales them to the grams the user confirms. So fixing a bad guess is
+ * tap-food → check grams → add, with zero numbers typed.
+ *
+ * The whole shelf is browsable without typing: candidates from the photo
+ * first, then what this person actually logs, then everything else.
+ */
+function openFoodPicker(ctx, { photo = null, scanLabel = null, candidates = [], prefill = '', heading = 'Pick the food' } = {}) {
+  const picked = (candidates || []).map((c) => (c && c.food ? c.food : c)).filter(Boolean);
+  const seen = new Set(picked.map((f) => f.id));
+
+  const recentFoods = [];
+  for (const m of [...state.meals].sort((a, b) => b.ts - a.ts)) {
+    if (recentFoods.length >= 6) break;
+    const f = FOODS.find((x) => x.name === m.name);
+    if (f && !seen.has(f.id)) { seen.add(f.id); recentFoods.push(f); }
+  }
+  const rest = FOODS.filter((f) => !seen.has(f.id));
+
+  const row = (f, tag = '') => `
+    <button class="listrow listrow--btn" data-food="${f.id}">
+      <div class="listrow__main">
+        <div class="listrow__t">${esc(f.name)}</div>
+        <div class="listrow__s">${Math.round(f.kcal)} kcal · ${Math.round(f.protein)}P ${Math.round(f.carbs)}C ${Math.round(f.fat)}F · ${f.serveG} g</div>
+      </div>
+      ${tag ? `<div class="listrow__end tiny muted">${esc(tag)}</div>` : ''}
+    </button>`;
+
+  const section = (label, rows) => (rows.length
+    ? `<div class="label" style="margin:12px 0 6px">${esc(label)}</div>
+       <div style="display:flex;flex-direction:column;gap:7px">${rows.join('')}</div>`
+    : '');
+
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">${esc(heading)}</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <div class="hint" style="margin-bottom:10px">Tap the food and the nutrition fills itself in — calories, protein, carbs and fat. You only confirm the portion.</div>
+      <input class="input" id="pick-q" placeholder="Search ${FOODS.length} foods (optional)" autocomplete="off">
+      <div id="pick-list" style="margin-top:4px"></div>
+    </div>
+  `, {
+    onMount(root) {
+      const list = root.querySelector('#pick-list');
+      const q = root.querySelector('#pick-q');
+
+      const draw = () => {
+        const query = q.value.trim();
+        if (query) {
+          const hits = searchFoods(query, 30);
+          list.innerHTML = hits.length
+            ? `<div style="display:flex;flex-direction:column;gap:7px">${hits.map((f) => row(f)).join('')}</div>`
+            : `<div class="empty" style="padding:22px">${icon('search')}<p>Nothing matches “${esc(query)}”.</p></div>`;
+        } else {
+          list.innerHTML = [
+            section('From this photo', picked.map((f, i) => row(f, i === 0 ? 'guess' : ''))),
+            section('Recent', recentFoods.map((f) => row(f))),
+            section(`All ${FOODS.length} foods`, rest.map((f) => row(f))),
+          ].join('');
+        }
+        list.querySelectorAll('[data-food]').forEach((b) => b.addEventListener('click', () => {
+          const f = FOODS.find((x) => x.id === b.dataset.food);
+          if (!f) return;
+          closeSheet();
+          setTimeout(() => openPortionSheet(f, ctx, { photo, source: photo ? 'scan' : 'manual', scanLabel }), 40);
+        }));
+      };
+
+      q.addEventListener('input', draw);
+      if (prefill && searchFoods(prefill, 1).length) q.value = prefill;
+      draw();
+    },
+  });
 }
 
 /* One answer, not a quiz: name the dish, log it, and make the correction
@@ -316,7 +402,7 @@ function showCandidates(root, match, photo, ctx) {
         <div class="row" style="gap:6px;flex-wrap:wrap">
           ${alts.map((c, i) => `<button class="pill" data-quick="${i}">${esc(c.food.name)}</button>`).join('')}
         </div>` : ''}
-      ${candidates.length > 1 ? `<button class="btn btn--ghost btn--sm btn--block" data-change style="margin-top:10px">See all ${candidates.length} matches</button>` : ''}
+      <button class="btn btn--ghost btn--sm btn--block" data-change style="margin-top:10px">Not right? Choose the food</button>
       <div class="tiny muted" style="margin-top:10px;text-align:center">The photo isn't saved.</div>`;
     box.querySelector('[data-log]').addEventListener('click', () => openFood(lead.food));
     box.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => {
@@ -327,28 +413,8 @@ function showCandidates(root, match, photo, ctx) {
   };
 
   const drawPicker = () => {
-    const options = candidates;
-    box.innerHTML = `
-      <div style="font-weight:650;font-size:14px;margin-bottom:3px">Change it</div>
-      <div class="tiny muted" style="margin-bottom:10px">Pick the right food for this photo. The app remembers it.</div>
-      <div style="display:flex;flex-direction:column;gap:7px">
-        ${options.map((c, i) => `
-          <button class="listrow listrow--btn" data-pick="${i}" style="border:1px solid var(--line);border-radius:13px;background:var(--card)">
-            <div class="listrow__main">
-              <div class="listrow__t">${esc(c.food.name)}</div>
-              <div class="listrow__s">${Math.round(c.food.kcal)} kcal per ${c.food.serveG} g</div>
-            </div>
-          </button>`).join('')}
-      </div>
-      <button class="btn btn--ghost btn--sm btn--block" style="margin-top:9px" data-search>Search all foods</button>`;
-
-    box.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
-      openFood(options[Number(b.dataset.pick)].food);
-    }));
-    box.querySelector('[data-search]').addEventListener('click', () => {
-      closeSheet();
-      openAddFood(ctx, { photo, scanLabel });
-    });
+    closeSheet();
+    setTimeout(() => openFoodPicker(ctx, { photo, scanLabel, candidates, heading: 'What was it?' }), 40);
   };
 
   drawAnswer();
@@ -500,7 +566,7 @@ function openPortionSheet(foodItem, ctx, { photo = null, source = 'manual', scan
             ${[0.5, 1, 1.5, 2].map((f) => `<button class="pill" data-mult="${f}">${f}×</button>`).join('')}
           </div>
         </div>
-        <div class="hint" style="margin-top:6px">1 serving = ${foodItem.serveG} g · ${Math.round(foodItem.kcal)} kcal</div>
+        <div class="hint" style="margin-top:6px">1 serving = ${foodItem.serveG} g · ${Math.round(foodItem.kcal)} kcal. Change the grams and everything recalculates from the food table — nothing to type.</div>
       </div>
       <div class="stats">
         <div class="stat"><div class="stat__v" id="p-kcal">0</div><div class="stat__l">kcal</div></div>
