@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#080B0D">
+<meta name="description" content="ENDURA — offline workout, nutrition and body tracking.">
+<title>ENDURA</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="favicon-32.png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ENDURA">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5h-5v5H5a1 1 0 0 1-1-1z"/></symbol>
+  <symbol id="i-dumbbell" viewBox="0 0 24 24"><path d="M3 9v6M6 7v10M18 7v10M21 9v6M6 12h12"/></symbol>
+  <symbol id="i-fork" viewBox="0 0 24 24"><path d="M7 3v7a2 2 0 0 0 4 0V3M9 12v9M16 3c-1.5 1-2 2.5-2 4.5S15 11 16 11s2-1.5 2-3.5S17.5 4 16 3zM16 11v10"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14.6a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.2a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.2a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.2a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.2a1.6 1.6 0 0 0-1.4 1z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><path d="M3 8.5A2.5 2.5 0 0 1 5.5 6h1.7l1.2-2h7.2l1.2 2h1.7A2.5 2.5 0 0 1 21 8.5v9A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z"/><circle cx="12" cy="13" r="3.6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-flame" viewBox="0 0 24 24"><path d="M12 3s5 4.2 5 9a5 5 0 0 1-10 0c0-1.6.6-3 1.5-4.2 0 0 .5 1.6 1.7 2.2C10.4 7.4 12 5.6 12 3z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l.8 12.2a1.5 1.5 0 0 0 1.5 1.3h6.4a1.5 1.5 0 0 0 1.5-1.3L17.5 7M10 11v6M14 11v6"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 4.5 4.5"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7.5 10.5 12 15l4.5-4.5M4 19h16"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7.5 8.5 12 4l4.5 4.5M4 20h16"/></symbol>
+  <symbol id="i-scale" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M8.5 14.5a3.5 3.5 0 0 1 7 0"/><path d="M12 14.5 13.8 10"/></symbol>
+</svg>
+
+<div class="app" id="app">
+  <main id="view" class="view" aria-live="polite"></main>
+
+  <div id="restbar" class="restbar" hidden>
+    <div class="restbar__ring" aria-hidden="true">
+      <svg viewBox="0 0 44 44"><circle class="track" cx="22" cy="22" r="19"/><circle class="prog" cx="22" cy="22" r="19"/></svg>
+      <span id="rest-time">0:00</span>
+    </div>
+    <div class="restbar__meta">
+      <strong id="rest-label">Rest</strong>
+      <span id="rest-next" class="muted">next set</span>
+    </div>
+    <div class="restbar__acts">
+      <button class="btn btn--ghost btn--sm" data-rest="-15">−15</button>
+      <button class="btn btn--ghost btn--sm" data-rest="+15">+15</button>
+      <button class="btn btn--sm" data-rest="skip">Skip</button>
+    </div>
+  </div>
+
+  <nav class="tabbar" id="tabbar" aria-label="Primary">
+    <a href="#/today" data-tab="today"><svg class="ic"><use href="#i-home"/></svg><span>Today</span></a>
+    <a href="#/workout" data-tab="workout"><svg class="ic"><use href="#i-dumbbell"/></svg><span>Train</span></a>
+    <a href="#/nutrition" data-tab="nutrition"><svg class="ic"><use href="#i-fork"/></svg><span>Food</span></a>
+    <a href="#/body" data-tab="body"><svg class="ic"><use href="#i-chart"/></svg><span>Body</span></a>
+    <a href="#/settings" data-tab="settings"><svg class="ic"><use href="#i-gear"/></svg><span>You</span></a>
+  </nav>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="sheet" id="sheet" role="dialog" aria-modal="true" tabindex="-1"></div>
+</div>
+
+<div class="toastwrap" id="toastwrap" aria-live="assertive"></div>
+
+<input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
+<input type="file" id="file-input" accept="application/json" hidden>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
