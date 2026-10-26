@@ -319,7 +319,8 @@ function showCandidates(root, match, photo, ctx) {
     box.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => {
       openFood(alts[Number(b.dataset.quick)].food);
     }));
-    box.querySelector('[data-change]').addEventListener('click', drawPicker);
+    const change = box.querySelector('[data-change]');
+    if (change) change.addEventListener('click', drawPicker);
   };
 
   const drawPicker = () => {
