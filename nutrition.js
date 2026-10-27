@@ -4,7 +4,7 @@ import {
 } from './core.js';
 import { pageHead, macroCard, dateNav, acts } from './common.js';
 import { searchFoods, FOODS, matchVisual } from './data.js';
-import { classify, cloudAnalyze, mergePreds, imageFeatures } from './vision.js';
+import { classify, cloudAnalyze, mergePreds, imageFeatures, CLOUD_LABELS } from './vision.js';
 
 /* Scan result: one answer, up to three one-tap alternatives, then the picker.
    The "See all" button only exists when there is more than one candidate, so
@@ -144,9 +144,9 @@ export function openScanner(ctx) {
         <div id="scan-idle">
           ${icon('camera')}
           <div style="font-weight:650;font-size:14px;margin-bottom:3px">Point at your plate</div>
-          <div class="tiny muted" style="max-width:30ch;margin:0 auto 14px">${cloudOn
-            ? 'Your provider estimates the nutrition of what is visible.'
-            : 'The dish is identified locally. You confirm the portion before it is logged.'}</div>
+          <div class="tiny muted" style="max-width:32ch;margin:0 auto 14px">${cloudOn
+            ? 'The model reads the plate and estimates what is on it.'
+            : 'Identified on-device from a small general model. Add a free Gemini key in You → Food scanning for plate-level accuracy.'}</div>
           <div class="row" style="justify-content:center;gap:8px">
             <button class="btn btn--primary" data-shot="camera">${icon('camera')}Camera</button>
             <button class="btn" data-shot="gallery">${icon('upload')}Gallery</button>
@@ -162,8 +162,8 @@ export function openScanner(ctx) {
       <div id="scan-result"></div>
       <div class="tiny muted" style="line-height:1.45">
         ${cloudOn
-          ? `Using <strong>${esc(s.cloud.provider)}</strong>${s.cloud.model ? ' · ' + esc(s.cloud.model) : ''}. Photo is sent to that API from this device.`
-          : 'Estimates come from a food-recognition model on this device plus a nutrition table. Portion size is the biggest source of error — check the grams before logging. Photos are never saved.'}
+          ? `Using <strong>${esc(CLOUD_LABELS[s.cloud.provider] || s.cloud.provider)}</strong>${s.cloud.model ? ' · ' + esc(s.cloud.model) : ''}. Photo is sent to that API from this device, never stored.`
+          : 'Estimates come from a food-recognition model on this device plus a nutrition table. It is weak on mixed plates — a free Gemini key fixes that. Photos are never saved.'}
         <button class="btn btn--bare tiny" data-act="vision-settings" style="padding:2px 4px;text-decoration:underline">Change</button>
       </div>
     </div>
@@ -191,12 +191,21 @@ export function openScanner(ctx) {
           sheetRoot.querySelector('#scan-preview').classList.remove('hidden');
 
           const cfg = state.settings.cloud;
+          // Cloud first when a key exists: it reads the whole plate, not just a
+          // general ImageNet label. If the call fails (offline, bad key, rate
+          // limit) the on-device pass still answers and says why.
+          let cloudNote = '';
           if (cfg.provider !== 'none' && cfg.key) {
-            status('Asking ' + cfg.provider + ' to read the plate…');
-            const result = await cloudAnalyze(full.dataUrl, cfg);
-            busy(false);
-            showCloudResult(sheetRoot, result, thumb.dataUrl, ctx);
-            return;
+            status('Reading the plate…');
+            try {
+              const result = await cloudAnalyze(full.dataUrl, cfg);
+              busy(false);
+              showCloudResult(sheetRoot, result, thumb.dataUrl, ctx);
+              return;
+            } catch (err) {
+              cloudNote = err.message || 'Cloud read failed';
+              status('Cloud read failed — using on-device…');
+            }
           }
 
           status('Loading model…');
@@ -220,6 +229,10 @@ export function openScanner(ctx) {
             showNoMatch(sheetRoot, thumb.dataUrl, match, ctx);
           } else {
             showCandidates(sheetRoot, match, thumb.dataUrl, ctx);
+          }
+          if (cloudNote) {
+            const box = sheetRoot.querySelector('#scan-result');
+            box.insertAdjacentHTML('afterbegin', `<div class="tiny" style="color:var(--warn);margin-bottom:8px;line-height:1.45">Cloud read failed — ${esc(cloudNote)} Showing the on-device guess instead.</div>`);
           }
         } catch (err) {
           busy(false);
@@ -629,7 +642,7 @@ function showCloudResult(root, result, photo, ctx) {
     box.innerHTML = `
       <div class="row" style="justify-content:space-between;margin-bottom:8px">
         <span class="badge badge--lime">${icon('spark')}${esc(result.confidence)} confidence</span>
-        <span class="tiny muted">${draft.length} item${draft.length > 1 ? 's' : ''}</span>
+        <span class="tiny muted">${draft.length} item${draft.length > 1 ? 's' : ''} · ${esc(CLOUD_LABELS[state.settings.cloud.provider] || 'cloud')}</span>
       </div>
       <div class="stack--sm" style="display:flex;flex-direction:column;gap:8px">
         ${draft.map((d, i) => `

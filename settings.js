@@ -4,7 +4,7 @@ import {
   dbPut, dbClear, forgetPhotoLearning,
 } from './core.js';
 import { pageHead, acts, switchRow } from './common.js';
-import { CLOUD_MODELS } from './vision.js';
+import { CLOUD_MODELS, CLOUD_LABELS } from './vision.js';
 import {
   auth, configureSync, checkBackend, signIn, signUp, signOut, saveUsername,
   enrollTotp, confirmTotp, disableTotp, verifyMfa, refreshFactors, USERNAME_RE,
@@ -194,37 +194,40 @@ export function render(ctx) {
     <section class="card" style="margin-top:12px">
       <div class="card__head">
         <h2>Food scanning</h2>
-        <span class="badge ${cloud.provider !== 'none' ? 'badge--lime' : 'badge--muted'}">${cloud.provider === 'none' ? 'on-device' : cloud.provider}</span>
+        <span class="badge ${cloud.provider !== 'none' ? 'badge--lime' : 'badge--muted'}">${cloud.provider === 'none' ? 'on-device' : esc(CLOUD_LABELS[cloud.provider] || cloud.provider)}</span>
       </div>
-      <div class="seg" id="prov-seg">
-        <button data-prov="none" aria-pressed="${cloud.provider === 'none'}">On-device</button>
+      <div class="seg" id="prov-seg" style="flex-wrap:wrap">
+        <button data-prov="gemini" aria-pressed="${cloud.provider === 'gemini'}">Gemini · free</button>
         <button data-prov="anthropic" aria-pressed="${cloud.provider === 'anthropic'}">Anthropic</button>
         <button data-prov="openai" aria-pressed="${cloud.provider === 'openai'}">OpenAI</button>
+        <button data-prov="none" aria-pressed="${cloud.provider === 'none'}">On-device</button>
       </div>
 
       <div id="cloud-fields" class="${cloud.provider === 'none' ? 'hidden' : ''}" style="margin-top:12px">
         <label class="field"><span class="field__l">API key</span>
           <div class="row" style="gap:6px">
-            <input class="input grow" id="cloud-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" value="${esc(cloud.key || '')}">
+            <input class="input grow" id="cloud-key" type="password" placeholder="${cloud.provider === 'gemini' ? 'AIza…' : 'sk-…'}" autocomplete="off" spellcheck="false" value="${esc(cloud.key || '')}">
             <button class="btn btn--icon" data-act="show-key" aria-label="Show key">${icon('search')}</button>
           </div>
         </label>
         <label class="field" style="margin-top:10px"><span class="field__l">Model</span>
-          <select class="input" id="cloud-model">
-            ${(CLOUD_MODELS[cloud.provider] || []).map((m) => `<option value="${m}" ${cloud.model === m ? 'selected' : ''}>${m}</option>`).join('')}
-          </select>
+          <input class="input" id="cloud-model" list="cloud-model-list" autocapitalize="off" spellcheck="false" value="${esc(cloud.model || (CLOUD_MODELS[cloud.provider] || [])[0] || '')}">
+          <datalist id="cloud-model-list">
+            ${(CLOUD_MODELS[cloud.provider] || []).map((m) => `<option value="${esc(m)}"></option>`).join('')}
+          </datalist>
         </label>
         <div class="row" style="gap:8px;margin-top:10px">
           <button class="btn btn--sm btn--primary" data-act="save-cloud">Save</button>
           <button class="btn btn--sm btn--ghost" data-act="clear-key">Remove key</button>
         </div>
-        <div class="hint" style="margin-top:8px">The key is stored on this device and sent only to the provider you pick. Photos are uploaded to that API for estimation.${cloud.provider === 'openai' ? ' OpenAI does not always allow direct browser calls — if you see a CORS error, use Anthropic or on-device scanning.' : ''}</div>
+        ${cloud.provider === 'gemini' ? `<div class="hint" style="margin-top:8px">Gemini has a free tier, no card: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--accent)">aistudio.google.com</a> → <em>Create API key</em>. Free keys are rate-limited, so a burst of scans may pause for a minute.</div>` : ''}
+        <div class="hint" style="margin-top:8px">The key is stored on this device and sent only to the provider you pick. Photos are uploaded to that API for estimation.${cloud.provider === 'openai' ? ' OpenAI does not always allow direct browser calls — if you see a CORS error, use Gemini or on-device scanning.' : ''}</div>
       </div>
 
       <div class="hint" style="margin-top:10px">
         ${cloud.provider === 'none'
-          ? 'Offline mode: a food-recognition model runs in the browser, then macros come from the built-in nutrition table — dishes, baked goods and pastries included. Best for single, recognisable items. Photos are never saved — not to the device, not anywhere.'
-          : 'Cloud mode: the model estimates portion and macros from the photo. More accurate for mixed plates, needs a connection. The photo is sent to the provider for that request and is not stored by the app.'}
+          ? 'Offline mode: a food-recognition model runs in the browser, then macros come from the built-in nutrition table — dishes, baked goods and pastries included. It only knows a few hundred general categories, so mixed plates and portions are rough. A free Gemini key makes it a lot better; photos are still never saved.'
+          : 'Cloud mode: the model looks at the photo, names every food on the plate and estimates the eaten weight, then you adjust the grams before logging. Needs a connection. The photo is sent to the provider for that request and is not stored by the app.'}
       </div>
     </section>
 
@@ -349,10 +352,13 @@ export function render(ctx) {
     },
     'save-cloud': async () => {
       const key = root.querySelector('#cloud-key').value.trim();
-      const model = root.querySelector('#cloud-model').value;
+      const provider = state.settings.cloud.provider;
+      const typed = root.querySelector('#cloud-model').value.trim();
+      const model = typed || (CLOUD_MODELS[provider] || [])[0] || '';
       if (!key) { toast('Paste an API key first', 'err'); return; }
-      await saveSettings({ cloud: { provider: state.settings.cloud.provider, key, model } });
+      await saveSettings({ cloud: { provider, key, model } });
       toast('Scanning configured', 'ok');
+      ctx.rerender();
     },
     'clear-key': async () => {
       await saveSettings({ cloud: { ...state.settings.cloud, key: '' } });

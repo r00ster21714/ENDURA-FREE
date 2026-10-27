@@ -138,20 +138,33 @@ export function mergePreds(lists) {
 
 /* ---------------- cloud estimation ---------------- */
 
-const PROMPT = `You are a nutrition estimator looking at a photo of food.
-Name the dish as specifically as the photo allows, then estimate the edible portion actually shown.
+const PROMPT = `You are a nutrition analyst reading one photo of food. Work out what is actually on the plate and how much of it the person is about to eat.
 
-Rules:
-- Name the dish, not the category. "cinnamon roll", not "pastry"; "blueberry muffin", not
-  "baked good"; "sourdough toast", not "bread". Homemade dishes get named like any other.
-- If several foods are on the plate, return one item per food.
-- Estimate portion sizes from visual cues (plate, hand, utensils, packaging).
-- Return totals for the visible portion, not per 100 g.
-- If you cannot identify the food, still return your best specific guess with low confidence.
-- Never return ranges or text instead of numbers. Numbers only, per item.
+Identifying:
+- Name each distinct food the way a person would say it: "grilled chicken thigh", "jasmine rice", "garlic naan", "cheeseburger", "blueberry muffin". Never answer with a category like "meat", "pastry" or "food".
+- List every component that carries calories: mains, sides, sauces, dressings, drinks, the oil something was fried in.
+- Use visible text, packaging, logos and restaurant context when they are legible.
+- A mixed plate is several items, not one item called "meal".
 
-Respond with STRICT JSON, no markdown, exactly this shape:
-{"items":[{"name":"string","grams":number,"kcal":number,"protein":number,"carbs":number,"fat":number}],"confidence":"low|medium|high","notes":"one short sentence"}`;
+Portion:
+- Anchor the scale on the plate rim, cutlery, a hand, a cup or packaging.
+- Give the cooked weight in grams of the part actually eaten. Exclude bones, shells and garnish that gets left.
+- Count cooking fat. A glossy sauce or a sheen of oil is not calorie-free.
+- If the plate is only partly full, estimate the food that is there, not a full serving.
+
+Numbers:
+- Per item: kcal, protein, carbs, fat for that portion. Keep them consistent with 4/4/9 kcal per gram.
+- Grams rounded to 5, macros to one decimal. No ranges, no words in numeric fields.
+
+Honesty:
+- If two dishes are plausible, name the likelier one, set confidence "low", and say what the other was in notes.
+- If the photo holds no food, return an empty items array and say why in notes.
+- Never invent a side dish that is not visible.
+
+Answer with JSON only, no markdown fence, exactly:
+{"items":[{"name":"","grams":0,"kcal":0,"protein":0,"carbs":0,"fat":0}],"confidence":"low|medium|high","notes":""}`;
+
+const ASK = 'Estimate this meal. One item per food visible.';
 
 function extractJson(text) {
   if (!text) throw new Error('Empty response from model');
@@ -213,13 +226,14 @@ async function apiFetch(url, opts) {
 }
 
 export const CLOUD_MODELS = {
-  anthropic: ['claude-3-5-haiku-latest', 'claude-3-5-sonnet-latest', 'claude-sonnet-4-5'],
-  openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1-mini'],
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
+  anthropic: ['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-3-5-haiku-latest'],
+  openai: ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini'],
 };
 
 /**
  * @param {string} dataUrl jpeg data URL
- * @param {{provider:'openai'|'anthropic', key:string, model?:string}} cfg
+ * @param {{provider:'openai'|'anthropic'|'gemini', key:string, model?:string}} cfg
  */
 export async function cloudAnalyze(dataUrl, cfg) {
   if (!cfg || !cfg.key) throw new Error('No API key configured');
@@ -227,8 +241,47 @@ export async function cloudAnalyze(dataUrl, cfg) {
   const model = cfg.model || CLOUD_MODELS[provider]?.[0];
   if (!model) throw new Error('Unknown provider: ' + provider);
   const t = timeout(60000);
+  const b64 = dataUrl.split(',')[1] || '';
 
   try {
+    if (provider === 'gemini') {
+      const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
+        + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(cfg.key);
+      const res = await apiFetch(url, {
+        method: 'POST',
+        signal: t.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              { text: PROMPT + '\n\n' + ASK },
+              { inline_data: { mime_type: 'image/jpeg', data: b64 } },
+            ],
+          }],
+          generationConfig: {
+            temperature: 0.15,
+            maxOutputTokens: 1200,
+            responseMimeType: 'application/json',
+          },
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const why = body?.error?.message || `Gemini ${res.status}`;
+        throw new Error(/api key|api_key|permission/i.test(why)
+          ? 'Gemini rejected that key. Check it was copied whole, from aistudio.google.com.'
+          : why);
+      }
+      const text = (body?.candidates?.[0]?.content?.parts || [])
+        .map((p) => p.text || '').join('');
+      if (!text) {
+        const block = body?.promptFeedback?.blockReason;
+        throw new Error(block ? 'Gemini blocked that photo (' + block + ')' : 'Gemini returned no answer');
+      }
+      return normalizeCloudResult(extractJson(text));
+    }
+
     if (provider === 'openai') {
       const res = await apiFetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
@@ -236,15 +289,15 @@ export async function cloudAnalyze(dataUrl, cfg) {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.key}` },
         body: JSON.stringify({
           model,
-          max_tokens: 600,
+          max_tokens: 900,
           response_format: { type: 'json_object' },
           messages: [
             { role: 'system', content: PROMPT },
             {
               role: 'user',
               content: [
-                { type: 'text', text: 'Estimate the nutrition for this meal.' },
-                { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
+                { type: 'text', text: ASK },
+                { type: 'image_url', image_url: { url: dataUrl, detail: 'high' } },
               ],
             },
           ],
@@ -257,7 +310,6 @@ export async function cloudAnalyze(dataUrl, cfg) {
     }
 
     if (provider === 'anthropic') {
-      const b64 = dataUrl.split(',')[1] || '';
       const res = await apiFetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         signal: t.signal,
@@ -269,12 +321,12 @@ export async function cloudAnalyze(dataUrl, cfg) {
         },
         body: JSON.stringify({
           model,
-          max_tokens: 600,
+          max_tokens: 900,
           messages: [{
             role: 'user',
             content: [
               { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-              { type: 'text', text: PROMPT + '\n\nEstimate the nutrition for this meal.' },
+              { type: 'text', text: PROMPT + '\n\n' + ASK },
             ],
           }],
         }),
@@ -295,3 +347,5 @@ export async function cloudAnalyze(dataUrl, cfg) {
     t.done();
   }
 }
+
+export const CLOUD_LABELS = { gemini: 'Google Gemini', anthropic: 'Anthropic', openai: 'OpenAI' };
