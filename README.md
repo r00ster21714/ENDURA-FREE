@@ -147,7 +147,10 @@ email, a username, friend links and a 2FA factor — never training data.
 2. SQL editor → run `tools/supabase-setup.sql` once. It creates `profiles` and `friendships` with
    row-level security, a unique `lower(username)` index, `username_taken()` and the
    `handle_new_user` trigger.
-3. Project settings → API → copy the **Project URL** and the **anon public** key.
+3. Project Settings → **API Keys** → copy the **Project URL** (`https://<project-ref>.supabase.co` —
+   the ref is the project ID, but the URL is the whole address, not just the ID) and the
+   **publishable** key (`sb_publishable_…`). Older projects label the same thing **anon public**;
+   either works. The SDK is `@supabase/supabase-js@2.118`, which supports both.
 4. In the app: **You → Set up accounts** → paste both → **Connect**.
 
 Then **Create account** (username + email + password) or **Sign in**. The session is persisted
@@ -165,8 +168,8 @@ confirm with a 6-digit code, required at next sign-in, and reversible. Phone-num
 offered because it needs an SMS provider (Twilio) with a card on file — the in-app copy says so
 rather than pretending.
 
-The anon key is public by design; RLS is what protects the rows. The service-role key is never used
-in the app.
+The public key (publishable or legacy anon) is public by design; RLS is what protects the rows. The
+secret / service-role key is never used in the app.
 
 Verified locally against a dummy project URL (no real project yet): 6 tabs render, Friends shows
 "Accounts are off", You shows "NOT SET UP", setup sheet accepts URL + key and flips to
