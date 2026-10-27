@@ -3,13 +3,14 @@ import {
   round1, kgToDisplay, displayToKg, weightLabel, cmToDisplay, displayToCm, lengthLabel,
   dbPut, dbClear, forgetPhotoLearning,
 } from './core.js';
-import { pageHead, acts } from './common.js';
+import { pageHead, acts, switchRow } from './common.js';
 import { CLOUD_MODELS } from './vision.js';
 import {
   auth, configureSync, checkBackend, signIn, signUp, signOut, saveUsername,
   enrollTotp, confirmTotp, disableTotp, verifyMfa, refreshFactors, USERNAME_RE,
   enrollPhone, startChallenge, verifyChallenge,
 } from './auth.js';
+import { sharePrefs, shareState, publishWeek } from './sharing.js';
 
 const joinedLabel = (iso) => {
   if (!iso) return '—';
@@ -90,6 +91,40 @@ function accountCard() {
     </section>`;
 }
 
+/* Close friends see a summary of the last seven days — never the raw log, and
+ * never a section that is switched off here. The switches build the payload, so
+ * "off" means the data is not uploaded at all. */
+function shareCard() {
+  if (!auth.session) {
+    return `
+    <section class="card" style="margin-top:12px">
+      <div class="card__head"><h2>Close friends</h2><span class="badge badge--muted">signed out</span></div>
+      <div class="hint">Sign in to share a week summary with the friends you mark as close.</div>
+    </section>`;
+  }
+
+  const p = sharePrefs();
+  const err = shareState.lastError;
+
+  return `
+    <section class="card" style="margin-top:12px">
+      <div class="card__head">
+        <h2>Close friends</h2>
+        <span class="badge ${p.enabled ? 'badge--lime' : 'badge--muted'}">${p.enabled ? 'sharing' : 'private'}</span>
+      </div>
+      <div class="hint" style="margin-bottom:4px">Mark a friend as close in <strong>Friends</strong>. Only close friends can read this; anyone else's app gets nothing back from the server.</div>
+      ${switchRow({ label: 'Share my week', sub: 'The last 7 days, summarised', on: p.enabled, attr: 'data-share="enabled"' })}
+      <div style="opacity:${p.enabled ? 1 : 0.4};${p.enabled ? '' : 'pointer-events:none'}">
+        ${switchRow({ label: 'Meals I logged', sub: 'Dish names and their calories', on: p.meals, attr: 'data-share="meals"' })}
+        ${switchRow({ label: 'Calories & macros', sub: 'Daily averages for the week', on: p.macros, attr: 'data-share="macros"' })}
+        ${switchRow({ label: 'Workouts', sub: 'Sessions, time and total volume', on: p.workouts, attr: 'data-share="workouts"' })}
+        ${switchRow({ label: 'Body', sub: 'Weight, body fat and waist', on: p.body, attr: 'data-share="body"' })}
+      </div>
+      ${err ? `<div class="hint" style="margin-top:8px;color:var(--danger);line-height:1.45">${esc(err)}</div>` : ''}
+      <div class="hint" style="margin-top:8px">Off means the section is never uploaded — not hidden after the fact. Photos, notes and the full log stay on this phone.</div>
+    </section>`;
+}
+
 export function render(ctx) {
   const s = state.settings;
   const units = s.units;
@@ -100,6 +135,7 @@ export function render(ctx) {
     ${pageHead({ eyebrow: 'Settings', title: 'You' })}
 
     ${accountCard()}
+    ${shareCard()}
 
     <section class="card" style="margin-top:12px">
       <div class="label" style="margin-bottom:8px">Units</div>
@@ -231,6 +267,17 @@ export function render(ctx) {
     if (b.dataset.unit === state.settings.units) return;
     await saveSettings({ units: b.dataset.unit });
     ctx.rerender();
+  }));
+
+  /* close-friend sharing: each switch flips one stored flag, then the week is
+   * republished (or withdrawn) so the server matches what the list says. */
+  root.querySelectorAll('[data-share]').forEach((b) => b.addEventListener('click', async () => {
+    const key = b.dataset.share;
+    const p = sharePrefs();
+    if (!(key in p)) return;
+    await saveSettings({ share: { [key]: !p[key] } });
+    ctx.rerender();
+    publishWeek().then((r) => { if (r && r.error) ctx.rerender(); });
   }));
 
   /* rest */

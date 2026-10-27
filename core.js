@@ -185,6 +185,8 @@ export const DEFAULT_SETTINGS = {
     url: 'https://npeinkgyioxlgotmwqea.supabase.co',
     key: 'sb_publishable_vvsQjcOBHNjhtwIopVJK-w_zbunWTCA',
   },
+  // What close friends may read. Off by default; every section is its own switch.
+  share: { enabled: false, meals: true, macros: true, workouts: true, body: false },
   onboarded: false,
 };
 
@@ -234,6 +236,7 @@ function mergeSettings(base, patch) {
   out.targets = { ...base.targets, ...(patch.targets || {}) };
   out.cloud = { ...base.cloud, ...(patch.cloud || {}) };
   out.sync = { ...base.sync, ...(patch.sync || {}) };
+  out.share = { ...base.share, ...(patch.share || {}) };
   // A saved blank must not erase the built-in server: an install that predates
   // the baked-in config would otherwise be left with no accounts at all.
   if (!out.sync.url || !out.sync.key) out.sync = { ...base.sync, ...(out.sync.url ? { url: out.sync.url } : {}), ...(out.sync.key ? { key: out.sync.key } : {}) };

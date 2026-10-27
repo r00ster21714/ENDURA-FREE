@@ -407,10 +407,24 @@ export async function friendsOverview() {
   const c = await getClient();
   if (!c || !auth.session) return { error: 'Sign in to use friends.' };
   const uid = myUid();
-  const { data, error } = await c
+
+  const base = () => c
     .from('friendships')
-    .select('requester,addressee,status,created_at')
+    .select('requester,addressee,status,close,created_at')
     .or(`requester.eq.${uid},addressee.eq.${uid}`);
+
+  let { data, error } = await base();
+  // Before the close-friends migration the column is missing; the list still
+  // has to load, just without the badge.
+  let hasClose = true;
+  if (error && /close/i.test(error.message || '')) {
+    hasClose = false;
+    const retry = await c
+      .from('friendships')
+      .select('requester,addressee,status,created_at')
+      .or(`requester.eq.${uid},addressee.eq.${uid}`);
+    data = retry.data; error = retry.error;
+  }
   if (error) return { error: errText(error) };
 
   const rows = data || [];
@@ -433,7 +447,7 @@ export async function friendsOverview() {
     const other = r.requester === uid ? r.addressee : r.requester;
     const p = byId.get(other);
     if (!p) continue;
-    if (r.status === 'accepted') friends.push({ ...p, since: r.created_at });
+    if (r.status === 'accepted') friends.push({ ...p, since: r.created_at, close: hasClose ? !!r.close : false });
     else if (r.requester === uid) outgoing.push({ ...p, since: r.created_at });
     else incoming.push({ ...p, since: r.created_at });
   }
@@ -474,4 +488,20 @@ export async function dropFriendship(id) {
   const b = await c.from('friendships').delete().eq('requester', id).eq('addressee', uid);
   const err = a.error || b.error;
   return err ? { error: errText(err) } : { ok: true };
+}
+
+/* Close friends. Either side can set it, and the change is mutual — it is one
+ * flag on the shared friendship row. A SECURITY DEFINER function does the write
+ * so neither person can use the same path to accept their own pending request. */
+export async function setCloseFriend(id, on) {
+  const c = await getClient();
+  if (!c || !auth.session) return { error: 'Sign in first.' };
+  const { error } = await c.rpc('set_close_friend', { p_other: id, p_on: !!on });
+  if (error) {
+    if (/does not exist|schema cache/i.test(error.message || '')) {
+      return { error: 'Close friends need the setup SQL: run tools/supabase-setup.sql in Supabase.' };
+    }
+    return { error: errText(error) };
+  }
+  return { ok: true };
 }

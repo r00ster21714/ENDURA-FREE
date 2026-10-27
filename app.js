@@ -7,6 +7,7 @@ import { render as renderSettings } from './settings.js';
 import { render as renderFriends } from './friends.js';
 import { initAuth, onAuth, auth } from './auth.js';
 import { gateNeeded, noteSignedIn, renderGate } from './gate.js';
+import { publishWeek, publishSoon } from './sharing.js';
 
 const viewEl = document.getElementById('view');
 const gateEl = document.getElementById('gate');
@@ -82,8 +83,14 @@ function render() {
 }
 
 subscribe(() => schedule());
-onAuth(() => schedule());
+// Every save ends in emit(), so the published week follows the log without the
+// screens having to remember to call it.
+subscribe(() => publishSoon());
+onAuth(() => { schedule(); if (auth.session) publishSoon(1200); });
 window.addEventListener('hashchange', schedule);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') publishWeek().catch(() => {});
+});
 
 (async function start() {
   try {

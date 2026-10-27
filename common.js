@@ -75,6 +75,18 @@ export function streakStrip(activityFn) {
   </div>`;
 }
 
+/* One switch row: label, optional sub-label, and a native-button toggle that
+ * the caller listens to with [data-key] / aria-checked. */
+export function switchRow({ label, sub = '', on, attr = '' }) {
+  return `<div class="listrow" style="padding-left:0;padding-right:0">
+    <div class="listrow__main">
+      <div class="listrow__t">${esc(label)}</div>
+      ${sub ? `<div class="listrow__s">${esc(sub)}</div>` : ''}
+    </div>
+    <button class="switch" role="switch" aria-checked="${on ? 'true' : 'false'}" aria-label="${esc(label)}" ${attr}></button>
+  </div>`;
+}
+
 export function acts(root, handlers) {
   root.addEventListener('click', (e) => {
     const node = e.target.closest('[data-act]');
