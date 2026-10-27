@@ -2,7 +2,8 @@
 
 Offline-first training, nutrition and body tracker that installs to a phone home screen.
 No framework, no build step. A free Supabase project holds accounts, usernames, friends and 2FA
-factors; everything you log stays in IndexedDB on the device.
+factors, plus — only if you switch it on — a seven-day summary your close friends can read;
+everything you log stays in IndexedDB on the device.
 
 ```
 index.html              app shell + SVG icon sprite
@@ -17,7 +18,8 @@ charts.js               canvas line chart (no chart library)
 rest.js                 global rest timer (WebAudio beep + vibration)
 gate.js                 account gate: first-run, sign-up, sign-in, 2FA
 auth.js                 Supabase client, session, username, 2FA, connection test
-friends.js              friend search, requests, friend list
+friends.js              friend search, requests, friend list, close-friend week viewer
+sharing.js              the seven-day summary close friends can read (write-time filtered)
 today.js workout.js nutrition.js body.js settings.js common.js
                         the five screens plus their shared UI helpers
 icon-*.png favicon-32.png apple-touch-icon.png
@@ -28,7 +30,7 @@ tools/make-icons.ps1    regenerates the PNG icons
 
 Every runtime file sits at the repo root on purpose: GitHub's web uploader flattens
 loose files dragged out of a subfolder, so a flat layout can't be deployed wrong.
-`endura-deploy/` is a copy of exactly those 21 runtime files.
+`endura-deploy/` is a copy of exactly those 25 runtime files.
 
 ## Run it
 
@@ -163,9 +165,10 @@ setup sheet. To use a different project: **You → Change**, paste the URL and k
 setup sheet reports what it actually found — reachable, key accepted, setup SQL installed.
 
 1. Supabase project (free tier, no card).
-2. SQL editor → run `tools/supabase-setup.sql` once. It creates `profiles` and `friendships` with
-   row-level security, a unique `lower(username)` index, `username_taken()` and the
-   `handle_new_user` trigger.
+2. SQL editor → run `tools/supabase-setup.sql` once. It creates `profiles`, `friendships`
+   (with the `close` flag), `shared_weeks` and `set_close_friend()`, all with row-level security,
+   plus the unique `lower(username)` index, `username_taken()` and the `handle_new_user` trigger.
+   Re-running it is safe.
 3. Authentication → Sign In / Up → turn **Confirm email** off. The bundled email service only
    delivers to project members, so leaving it on means nobody else can finish signing up.
 4. Project Settings → **API Keys** → copy the **Project URL** (`https://<project-ref>.supabase.co` —
@@ -185,6 +188,35 @@ app; You keeps offering sign-in and the next successful sign-out clears the esca
 **Friends** is its own tab: your @username with a copy button, live prefix search (2+ characters)
 with relation badges (Add / pending / friends / accept), incoming requests, and the friend list
 with Remove. Requests are rows in `friendships`; RLS lets only the two people involved read them.
+
+## Close friends
+
+Tap a friend to open their sheet: **Close friend**, **See their week**, **Remove friend**. The flag
+lives on the friendship row and is mutual — either side can set it, and both become close friends.
+A `SECURITY DEFINER` function (`set_close_friend`) does that write, so the same path cannot be used
+to accept your own pending request.
+
+Close friends can read a summary of the **last seven days**, and nothing else. It is built from
+your log when the app saves, and every section has its own switch in **You → Close friends**:
+
+| Switch | What a close friend sees |
+|---|---|
+| Share my week | the master switch; off deletes the published row |
+| Meals I logged | dish names, day, grams, kcal (last 60) |
+| Calories & macros | daily average kcal · P / C / F, days logged |
+| Workouts | session count, total time, total volume, last 20 sessions |
+| Body | latest weight, change across the week, body fat, waist |
+
+The filtering happens **before upload**: `sharing.js` builds the payload from the switched-on
+sections only, so a section that is off is never sent and never stored. Turning the master switch
+off deletes the row rather than blanking it. Photos, notes and the full log are never part of the
+payload.
+
+RLS on `shared_weeks` returns a row only to its owner or to an accepted friendship with `close`
+set, so a non-close friend's app gets nothing back from the server even if it asks by id. One row
+per user (`user_id` primary key), republished debounced on every save, on sign-in and when the app
+is hidden, so the server copy is never far behind the phone. The payload carries the owner's
+`units` so a viewer on lb/in reads lb/in.
 
 **2FA** is chosen when you turn it on:
 
@@ -217,7 +249,16 @@ silently, and the app hides behind the gate with nothing in the console. The key
 | `sessions` | workout name, timestamps, per-exercise sets (weight, reps, done) |
 | `meals` | name, grams, kcal, protein/carbs/fat, source — **no photo** |
 | `metrics` | weight, body fat, tape measurements, optional progress photo |
-| `kv` | settings (units, targets, rest, cloud key, Supabase URL + anon key) and learned scan labels |
+| `kv` | settings (units, targets, rest, cloud key, Supabase URL + anon key, close-friend switches) and learned scan labels |
+
+| Server (Supabase) | Contents |
+|---|---|
+| `profiles` | username, display name |
+| `friendships` | two user ids, pending/accepted, the mutual `close` flag |
+| `shared_weeks` | one row per user: the seven-day payload, containing **only** the switched-on sections |
+
+`shared_weeks` is the only place training data can ever be online, it holds nothing that a section
+switch excluded, and turning sharing off deletes the row.
 
 **Food photos are never written to storage.** A scan keeps the JPEG in memory for the preview
 sheet and the cloud request, then drops it. `addMeal()` strips any `photo` field at the single
@@ -258,10 +299,19 @@ Tested in Chromium against a local server:
 - rebrand: manifest, title, header and export are ENDURA (`en-v1`); old `ft-v8`
   cache is evicted on first load and the IndexedDB name is kept on purpose so
   existing logs survive
+- close-friend settings card renders on the live project as `PRIVATE`, with the four section
+  switches under a master; flipping the master stores `share.enabled`, republishes, and surfaces
+  the missing-table message cleanly until the SQL is run
+- Friends tab still renders `0 friends / No friends yet` before the migration, because
+  `friendsOverview()` retries without the `close` column instead of failing the whole tab
 
 Not verified here: real camera capture on iOS/Android, audio beep volume, install prompt on a
-physical device, cloud estimation with a live API key, and a real Supabase project (sign-up,
-friend requests, TOTP enrolment) — the code paths and UI are tested against a dummy project only.
+physical device, cloud estimation with a live API key, a real friend request between two accounts,
+and the close-friend read path — that one needs `shared_weeks` to exist in the project first
+(`tools/supabase-setup.sql`), which only the project owner can run. The switches, the payload
+builder, the friend sheet and the week viewer are tested locally, and the Friends tab loads
+against the live project both before and after the migration (it retries without `close` when the
+column is missing).
 
 ## Known gaps
 

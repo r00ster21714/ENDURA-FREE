@@ -1,4 +1,4 @@
--- ENDURA accounts + friends — run once in the Supabase SQL editor.
+-- ENDURA accounts, friends, close friends and 2FA - run in the Supabase SQL editor.
 -- Safe to re-run: every object is created only if missing, policies are replaced.
 
 -- ---------------------------------------------------------------- profiles
@@ -37,6 +37,9 @@ create table if not exists public.friendships (
   check (requester <> addressee)
 );
 
+-- close friends: one flag per friendship, set by either side, mutual.
+alter table public.friendships add column if not exists close boolean not null default false;
+
 alter table public.friendships enable row level security;
 
 drop policy if exists "read own friendships" on public.friendships;
@@ -58,6 +61,25 @@ drop policy if exists "delete own friendship" on public.friendships;
 create policy "delete own friendship"
   on public.friendships for delete to authenticated
   using (auth.uid() = requester or auth.uid() = addressee);
+
+-- Either side can mark the pair close. Done in a SECURITY DEFINER function so
+-- the only thing the column update can touch is `close` on an accepted pair -
+-- a plain update policy would also let a requester accept their own request.
+create or replace function public.set_close_friend(p_other uuid, p_on boolean)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.friendships
+     set close = p_on
+   where status = 'accepted'
+     and ((requester = auth.uid() and addressee = p_other)
+       or (addressee = auth.uid() and requester = p_other));
+$$;
+
+revoke all on function public.set_close_friend(uuid, boolean) from public;
+grant execute on function public.set_close_friend(uuid, boolean) to authenticated;
 
 -- ------------------------------------------------------- username helpers
 -- Called before signup so a taken name fails early instead of at the trigger.
@@ -93,7 +115,52 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- --------------------------------------------------------- shared weeks
+-- One row per user: the summary their app chose to publish. When a section is
+-- switched off in the app it is never written here, so the server cannot leak
+-- it. Turning sharing off deletes the row.
+create table if not exists public.shared_weeks (
+  user_id    uuid primary key references public.profiles (id) on delete cascade,
+  from_date  date not null,
+  to_date    date not null,
+  payload    jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.shared_weeks enable row level security;
+
+-- Read: yourself, or someone you are in a close, accepted friendship with.
+drop policy if exists "read own or close friend week" on public.shared_weeks;
+create policy "read own or close friend week"
+  on public.shared_weeks for select to authenticated
+  using (
+    user_id = auth.uid()
+    or exists (
+      select 1
+        from public.friendships f
+       where f.status = 'accepted'
+         and f.close
+         and ((f.requester = auth.uid() and f.addressee = shared_weeks.user_id)
+           or (f.addressee = auth.uid() and f.requester = shared_weeks.user_id))
+    )
+  );
+
+drop policy if exists "write own week" on public.shared_weeks;
+create policy "write own week"
+  on public.shared_weeks for insert to authenticated
+  with check (user_id = auth.uid());
+
+drop policy if exists "update own week" on public.shared_weeks;
+create policy "update own week"
+  on public.shared_weeks for update to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists "delete own week" on public.shared_weeks;
+create policy "delete own week"
+  on public.shared_weeks for delete to authenticated
+  using (user_id = auth.uid());
+
 -- ---------------------------------------------------------------- 2FA
 -- Authenticator-app (TOTP) factors are handled by Supabase Auth itself;
--- no table needed. Phone/SMS 2FA requires an SMS provider (Twilio) in
--- Authentication → Providers → Phone.
+-- no table needed. Phone/SMS 2FA needs an SMS provider (Twilio) connected in
+-- Authentication -> Sign In / Providers -> Phone.
