@@ -1,6 +1,6 @@
 /* ENDURA service worker — offline shell + model cache */
 
-const VERSION = 'en-v17';
+const VERSION = 'en-v18';
 const CDN_CACHE = 'endura-cdn';
 const SHELL = [
   './',
@@ -33,10 +33,14 @@ const SHELL = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(VERSION)
-      // cache: 'reload' skips the HTTP cache. Without it a phone that updates
-      // minutes after a deploy can precache the previous build's files under the
-      // new version name and stay stale until the next bump.
-      .then((cache) => cache.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+      // The query string makes each version's requests distinct objects for the
+      // CDN. Without it, GitHub Pages' ~10 minute edge cache can hand the new
+      // worker the previous build's files, which then stick under the new
+      // version name. `cache: 'reload'` skips the browser's own HTTP cache too.
+      .then((cache) => cache.addAll(SHELL.map((u) => new Request(
+        u + (u.includes('?') ? '&' : '?') + 'v=' + VERSION,
+        { cache: 'reload' },
+      ))))
       .then(() => self.skipWaiting())
       .catch((err) => console.warn('precache incomplete', err))
   );
