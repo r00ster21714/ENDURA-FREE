@@ -9,7 +9,9 @@
  */
 import { state, saveSettings } from './core.js';
 
-const SDK_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
+// 2.118 ships support for the current `sb_publishable_…` keys as well as the
+// legacy anon JWT, so either key the dashboard offers works.
+const SDK_URL = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.118.0/+esm';
 export const USERNAME_RE = /^[a-z0-9_]{3,20}$/;
 
 let client = null;
@@ -71,7 +73,7 @@ export async function getClient() {
   return client;
 }
 
-/** Save the project URL + anon key, then connect. */
+/** Save the project URL + publishable (or legacy anon) key, then connect. */
 export async function configureSync({ url, key }) {
   await saveSettings({ sync: { url: String(url || '').trim(), key: String(key || '').trim() } });
   client = null;

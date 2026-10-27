@@ -544,12 +544,12 @@ function openSyncSetup(ctx) {
       <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
     </div>
     <div class="sheet__body">
-      <div class="hint" style="line-height:1.5">1. Create a free project at supabase.com.<br>2. In the SQL editor, run <strong>supabase-setup.sql</strong> once.<br>3. Project settings → API: paste the Project URL and the anon public key below.</div>
+      <div class="hint" style="line-height:1.5">1. Create a free project at supabase.com.<br>2. In the SQL editor, run <strong>supabase-setup.sql</strong> once.<br>3. Project Settings → API Keys: copy the <strong>Project URL</strong> and the <strong>publishable</strong> key below.</div>
       <label class="field" style="margin-top:12px"><span class="field__l">Project URL</span>
-        <input class="input" id="sb-url" placeholder="https://xxxx.supabase.co" value="${esc(s.url || '')}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
-      <label class="field" style="margin-top:8px"><span class="field__l">Anon public key</span>
-        <input class="input" id="sb-key" placeholder="eyJhbGciOi…" value="${esc(s.key || '')}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
-      <div class="hint" style="margin-top:8px">The anon key is public by design — row-level security decides what it can read.</div>
+        <input class="input" id="sb-url" placeholder="https://your-project-ref.supabase.co" value="${esc(s.url || '')}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+      <label class="field" style="margin-top:8px"><span class="field__l">Publishable key</span>
+        <input class="input" id="sb-key" placeholder="sb_publishable_…" value="${esc(s.key || '')}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+      <div class="hint" style="margin-top:8px">Newer projects call it <strong>publishable</strong>; older ones call it <strong>anon public</strong>. Either works — both are public by design. Row-level security decides what it can read. Never paste the <strong>secret</strong> key. For the URL, the full <code>https://…supabase.co</code> is best, but the bare project ID works too.</div>
     </div>
     <div class="sheet__foot">
       <button class="btn" data-close>Cancel</button>
@@ -558,10 +558,17 @@ function openSyncSetup(ctx) {
   `, {
     onMount(root) {
       root.querySelector('[data-connect]').addEventListener('click', async () => {
-        const url = root.querySelector('#sb-url').value.trim().replace(/\/+$/, '');
+        // Accept the full URL, a bare host, a pasted REST endpoint, or just the
+        // project ref, and normalise to the origin the SDK expects.
+        const raw = root.querySelector('#sb-url').value.trim();
+        let url = raw.replace(/\/+$/, '').replace(/\/rest\/v1$/i, '').replace(/\/+$/, '');
+        if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+        if (!url.replace(/^https?:\/\//i, '').includes('.')) url += '.supabase.co';
         const key = root.querySelector('#sb-key').value.trim();
-        if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url)) { toast('Paste the project URL', 'err'); return; }
-        if (key.length < 40) { toast('Paste the anon public key', 'err'); return; }
+        if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url)) { toast('Paste the full project URL: https://<ref>.supabase.co', 'err'); return; }
+        // Publishable keys are short and opaque; legacy anon keys are long JWTs.
+        const keyOk = /^sb_publishable_[A-Za-z0-9_-]{10,}$/.test(key) || key.length >= 40;
+        if (!keyOk) { toast('Paste the publishable (or anon) key', 'err'); return; }
         const btn = root.querySelector('[data-connect]');
         btn.disabled = true;
         btn.textContent = 'Connecting…';
