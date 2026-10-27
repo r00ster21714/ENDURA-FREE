@@ -6,7 +6,7 @@ import {
 import { pageHead, acts } from './common.js';
 import { CLOUD_MODELS } from './vision.js';
 import {
-  auth, configureSync, signIn, signUp, signOut, saveUsername,
+  auth, configureSync, checkBackend, signIn, signUp, signOut, saveUsername,
   enrollTotp, confirmTotp, disableTotp, verifyMfa, refreshFactors, USERNAME_RE,
 } from './auth.js';
 
@@ -39,15 +39,22 @@ function accountCard() {
   }
 
   if (!auth.session) {
+    const ref = String((state.settings.sync || {}).url || '').replace(/^https:\/\//i, '').replace(/\.supabase\.co$/i, '');
     return `
     <section class="card">
       <div class="card__head"><h2>Account</h2><span class="badge badge--muted">signed out</span></div>
       <div class="hint">Sign in or create an account. Your local data is never uploaded — only your username and friends live on the server.</div>
-      ${auth.error ? `<div class="hint" style="color:var(--danger);margin-top:8px">${auth.error}</div>` : ''}
+      ${auth.error ? `<div class="hint" style="color:var(--danger);margin-top:8px">${esc(auth.error)}</div>` : ''}
       <div class="row" style="gap:8px;margin-top:10px">
         <button class="btn btn--sm btn--primary" data-act="sign-in">Sign in</button>
         <button class="btn btn--sm" data-act="sign-up">Create account</button>
       </div>
+      <div class="row" style="gap:8px;margin-top:10px;align-items:center">
+        <span class="tiny muted" style="min-width:0;overflow:hidden;text-overflow:ellipsis">${ref ? 'Project ' + esc(ref) : ''}</span>
+        <button class="btn btn--bare tiny" style="margin-left:auto" data-act="sync-test">Test connection</button>
+        <button class="btn btn--bare tiny" data-act="sync-setup">Change</button>
+      </div>
+      <div id="sync-test-out" class="hint" style="margin-top:6px"></div>
     </section>`;
   }
 
@@ -258,6 +265,19 @@ export function render(ctx) {
     targets: () => openTargets(ctx),
     calc: () => openCalculator(ctx),
     'sync-setup': () => openSyncSetup(ctx),
+    'sync-test': async () => {
+      const out = root.querySelector('#sync-test-out');
+      if (out) { out.style.color = ''; out.textContent = 'Checking…'; }
+      const c = await checkBackend();
+      if (!out) return;
+      if (c.reachable && c.sql) {
+        out.style.color = 'var(--accent)';
+        out.textContent = 'Project reachable, key accepted, setup SQL installed.';
+      } else {
+        out.style.color = 'var(--danger)';
+        out.textContent = c.error || 'Could not connect.';
+      }
+    },
     'sign-in': () => openSignIn(ctx),
     'sign-up': () => openSignUp(ctx),
     'sign-out': async () => {
@@ -544,12 +564,13 @@ function openSyncSetup(ctx) {
       <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
     </div>
     <div class="sheet__body">
-      <div class="hint" style="line-height:1.5">1. Create a free project at supabase.com.<br>2. In the SQL editor, run <strong>supabase-setup.sql</strong> once.<br>3. Project Settings → API Keys: copy the <strong>Project URL</strong> and the <strong>publishable</strong> key below.</div>
+      <div class="hint" style="line-height:1.5">1. Create a free project at supabase.com.<br>2. In the SQL editor, run <strong>supabase-setup.sql</strong> once.<br>3. Project Settings → API Keys: copy the <strong>Project URL</strong> and the <strong>publishable</strong> key below.<br>4. Authentication → Sign In / Up: turn <strong>Confirm email</strong> off, so an account works immediately.</div>
       <label class="field" style="margin-top:12px"><span class="field__l">Project URL</span>
         <input class="input" id="sb-url" placeholder="https://your-project-ref.supabase.co" value="${esc(s.url || '')}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
       <label class="field" style="margin-top:8px"><span class="field__l">Publishable key</span>
         <input class="input" id="sb-key" placeholder="sb_publishable_…" value="${esc(s.key || '')}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
       <div class="hint" style="margin-top:8px">Newer projects call it <strong>publishable</strong>; older ones call it <strong>anon public</strong>. Either works — both are public by design. Row-level security decides what it can read. Never paste the <strong>secret</strong> key. For the URL, the full <code>https://…supabase.co</code> is best, but the bare project ID works too.</div>
+      <div id="sb-status" class="hint" style="margin-top:10px"></div>
     </div>
     <div class="sheet__foot">
       <button class="btn" data-close>Cancel</button>
@@ -557,6 +578,7 @@ function openSyncSetup(ctx) {
     </div>
   `, {
     onMount(root) {
+      const status = root.querySelector('#sb-status');
       root.querySelector('[data-connect]').addEventListener('click', async () => {
         // Accept the full URL, a bare host, a pasted REST endpoint, or just the
         // project ref, and normalise to the origin the SDK expects.
@@ -572,9 +594,23 @@ function openSyncSetup(ctx) {
         const btn = root.querySelector('[data-connect]');
         btn.disabled = true;
         btn.textContent = 'Connecting…';
-        const ok = await configureSync({ url, key });
-        closeSheet();
-        toast(ok ? 'Accounts connected' : 'Could not connect', ok ? 'ok' : 'err');
+        status.style.color = '';
+        status.textContent = 'Checking the project…';
+
+        await configureSync({ url, key });
+        const check = await checkBackend();
+        btn.disabled = false;
+        btn.textContent = 'Connect';
+
+        if (check.reachable && check.sql) {
+          const ref = url.replace(/^https:\/\//i, '').replace(/\.supabase\.co$/i, '');
+          status.style.color = 'var(--accent)';
+          status.innerHTML = `Connected to <strong>${esc(ref)}</strong> — SQL and key both check out. Sign in or create an account below.`;
+          setTimeout(() => { closeSheet(); ctx.rerender(); }, 1600);
+          return;
+        }
+        status.style.color = 'var(--danger)';
+        status.textContent = check.error || 'Could not connect.';
         ctx.rerender();
       });
     },
@@ -664,7 +700,7 @@ function openSignUp(ctx) {
         }
         if (res.needsConfirm) {
           msg.style.color = 'var(--accent)';
-          msg.textContent = 'Account created. Confirm the email Supabase just sent, then sign in. (Turn off email confirmations in Supabase for instant sign-in.)';
+          msg.textContent = 'Account created, but this project still asks for email confirmation — and the free email service only delivers to the project owner. In Supabase open Authentication → Sign In / Up and turn Confirm email off, then sign in here.';
           return;
         }
         closeSheet();

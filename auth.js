@@ -45,6 +45,22 @@ export const authConfigured = () => !!(syncCfg().url && syncCfg().key);
 
 const errText = (e) => (e && (e.message || e.error_description || e.msg)) || String(e || 'Unknown error');
 
+/* GoTrue's two most common setup failures are opaque. Translate them once here
+ * so every screen gets the actionable version instead of the raw code. */
+function setupHint(msg) {
+  const m = String(msg || '');
+  if (/email not confirmed/i.test(m)) {
+    return 'This account still needs email confirmation. In Supabase: Authentication → Sign In / Up → turn Confirm email off, then try again. (The free email service only delivers to the project owner, so leaving it on blocks everyone else.)';
+  }
+  if (/invalid api key|no api key|jwt/i.test(m) && /key/i.test(m)) {
+    return 'That key was rejected. Copy the publishable key again from Project Settings → API Keys, not the secret key.';
+  }
+  if (/failed to fetch|networkerror|load failed/i.test(m)) {
+    return 'Could not reach the project. Check the URL is https://<project-ref>.supabase.co and that this device is online.';
+  }
+  return m;
+}
+
 async function loadSdk() {
   if (!sdkPromise) sdkPromise = import(SDK_URL);
   return sdkPromise;
@@ -82,6 +98,28 @@ export async function configureSync({ url, key }) {
   return auth.configured;
 }
 
+/**
+ * Three independent facts the setup sheet needs to report honestly:
+ *   reachable — the SDK got a response from this project at all
+ *   sql       — `username_taken()` exists, i.e. supabase-setup.sql was run
+ *   key       — the key was accepted (a bad key answers 401, not 404)
+ */
+export async function checkBackend() {
+  const c = await getClient();
+  if (!c) return { reachable: false, sql: false, error: 'Accounts are not set up yet.' };
+  try {
+    const { error } = await c.rpc('username_taken', { u: '__endura_probe__' });
+    if (!error) return { reachable: true, sql: true, error: '' };
+    const msg = errText(error);
+    if (/404|could not find the function|does not exist/i.test(msg)) {
+      return { reachable: true, sql: false, error: 'Connected, but supabase-setup.sql has not been run in this project.' };
+    }
+    return { reachable: false, sql: false, error: setupHint(msg) };
+  } catch (err) {
+    return { reachable: false, sql: false, error: setupHint(errText(err)) };
+  }
+}
+
 /** Restore the saved session (auto sign-in) and load the profile. */
 export async function initAuth() {
   auth.configured = authConfigured();
@@ -104,7 +142,7 @@ export async function initAuth() {
       }
     }
   } catch (err) {
-    auth.error = errText(err);
+    auth.error = setupHint(errText(err));
   }
   auth.ready = true;
   notify();
@@ -173,7 +211,7 @@ export async function signUp({ email, password, username }) {
       password,
       options: { data: { username: name } },
     });
-    if (error) return { error: errText(error) };
+    if (error) return { error: setupHint(errText(error)) };
     if (!data.session) return { needsConfirm: true, email };
     auth.session = data.session;
     await loadProfile();
@@ -194,7 +232,7 @@ export async function signIn({ email, password }) {
   notify();
   try {
     const { data, error } = await c.auth.signInWithPassword({ email, password });
-    if (error) return { error: errText(error) };
+    if (error) return { error: setupHint(errText(error)) };
     auth.session = data.session;
     const { data: aal } = await c.auth.mfa.getAuthenticatorAssuranceLevel();
     auth.needsMfa = !!(aal && aal.nextLevel === 'aal2' && aal.currentLevel === 'aal1');
