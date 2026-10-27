@@ -259,6 +259,8 @@ export async function signOut() {
   auth.profile = null;
   auth.needsMfa = false;
   auth.error = '';
+  // Signing out must return to the account screen, not to a skipped state.
+  try { localStorage.removeItem('endura.acct.offline'); } catch { /* storage blocked */ }
   auth.busy = false;
   notify();
 }
@@ -281,7 +283,9 @@ export async function mfaFactors() {
   if (!c) return [];
   const { data, error } = await c.auth.mfa.listFactors();
   if (error) throw error;
-  return (data && data.totp) || [];
+  // TOTP and phone factors both count as second factors; a phone-enrolled
+  // account must not look unprotected just because its factor is not TOTP.
+  return [...((data && data.totp) || []), ...((data && data.phone) || [])];
 }
 
 export async function refreshFactors() {
@@ -300,16 +304,50 @@ export async function enrollTotp() {
   return { id: data.id, secret: data.totp.secret, uri: data.totp.uri };
 }
 
-export async function confirmTotp(factorId, code) {
+/* Phone-number 2FA sends the code by text message. Supabase can only do that
+ * when the project has an SMS provider (Twilio) connected, so the caller has to
+ * be prepared for this to fail and say why. */
+export async function enrollPhone(phone) {
+  const c = await getClient();
+  if (!c) throw new Error('Accounts are not set up yet.');
+  const existing = await mfaFactors();
+  if (existing.some((f) => f.status === 'verified')) throw new Error('2FA is already on.');
+  const cleaned = String(phone || '').replace(/[^\d+]/g, '');
+  if (!/^\+\d{8,15}$/.test(cleaned)) throw new Error('Use the full international number, e.g. +1 555 010 9999.');
+  const { data, error } = await c.auth.mfa.enroll({ factorType: 'phone', phone: cleaned });
+  if (error) throw error;
+  return { id: data.id, phone: cleaned };
+}
+
+/** Ask for a fresh challenge. For a phone factor this is what sends the SMS. */
+export async function startChallenge(factorId) {
   const c = await getClient();
   if (!c) return { error: 'Accounts are not set up yet.' };
-  const { data: ch, error: chErr } = await c.auth.mfa.challenge({ factorId });
-  if (chErr) return { error: errText(chErr) };
-  const { error } = await c.auth.mfa.verify({ factorId, challengeId: ch.id, code: String(code || '').trim() });
+  const { data, error } = await c.auth.mfa.challenge({ factorId });
+  if (error) return { error: errText(error) };
+  return { ok: true, challengeId: data.id };
+}
+
+export async function verifyChallenge(factorId, challengeId, code) {
+  const c = await getClient();
+  if (!c) return { error: 'Accounts are not set up yet.' };
+  const { error } = await c.auth.mfa.verify({ factorId, challengeId, code: String(code || '').trim() });
   if (error) return { error: errText(error) };
   auth.needsMfa = false;
   return { ok: true };
 }
+
+/** Verify any factor's challenge — TOTP and phone OTP take the same path. */
+export async function confirmFactor(factorId, code) {
+  const ch = await startChallenge(factorId);
+  if (ch.error) return ch;
+  return verifyChallenge(factorId, ch.challengeId, code);
+}
+
+export const confirmTotp = confirmFactor;
+
+/** Re-send a phone factor's SMS (a fresh challenge does the send). */
+export const resendFactorCode = startChallenge;
 
 export async function disableTotp(factorId) {
   const c = await getClient();
@@ -324,7 +362,7 @@ export async function verifyMfa(code) {
   const factors = await mfaFactors().catch(() => []);
   const factor = factors.find((f) => f.status === 'verified');
   if (!factor) return { error: 'No 2FA factor on this account.' };
-  const res = await confirmTotp(factor.id, code);
+  const res = await confirmFactor(factor.id, code);
   if (res.error) return res;
   await loadProfile();
   return { ok: true };

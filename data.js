@@ -79,6 +79,21 @@ export const FOODS = [
   food('Bell pepper', 26, 1, 6, 0.3, 100, ['pepper', 'capsicum']),
   food('Spinach', 23, 2.9, 3.6, 0.4, 100, ['spinach', 'greens']),
   food('Salad (mixed)', 25, 1.5, 3, 0.3, 150, ['salad', 'green salad', 'side salad'], '1 bowl'),
+
+  /* Whole-plate dishes. A photo of steak and rice is two foods, and no single
+     ImageNet label can name it — but refusing to answer pushed the work back
+     onto the person holding the phone. These carry realistic macros for a
+     normal serving so a plate still gets a name and a number in one tap. */
+  food('Meat and rice', 620, 40, 62, 18, 450, ['steak and rice', 'beef and rice', 'meat and rice', 'steak rice']),
+  food('Chicken and rice', 560, 40, 58, 14, 450, ['chicken and rice', 'chicken rice bowl']),
+  food('Fish and rice', 520, 34, 58, 12, 450, ['fish and rice', 'salmon and rice', 'tuna and rice']),
+  food('Meat and pasta', 660, 32, 70, 24, 450, ['steak pasta', 'beef pasta', 'meat pasta', 'bolognese', 'meat sauce pasta']),
+  food('Chicken and pasta', 600, 34, 68, 18, 450, ['chicken pasta', 'chicken alfredo']),
+  food('Fish and pasta', 560, 30, 66, 16, 450, ['fish pasta', 'salmon pasta']),
+  food('Meat and potatoes', 580, 32, 52, 24, 400, ['steak and potatoes', 'meat and potatoes', 'bangers and mash']),
+  food('Chicken and potatoes', 520, 34, 50, 18, 400, ['chicken and potatoes', 'chicken and chips']),
+  food('Meat and vegetables', 420, 34, 18, 24, 400, ['meat and veg', 'steak and veg', 'meat and vegetables']),
+  food('Chicken and vegetables', 380, 36, 16, 18, 400, ['chicken and veg', 'chicken and broccoli', 'chicken and vegetables']),
   food('Caesar salad', 190, 8, 6, 15, 250, ['chicken caesar'], '1 bowl'),
   food('Avocado', 160, 2, 9, 15, 100, ['avocado', 'guacamole'], 'half avocado'),
   food('Banana', 105, 1.3, 27, 0.4, 118, ['banana'], '1 medium'),
@@ -489,6 +504,62 @@ export const matchLabels = (predictions, learned) => matchVisual(predictions, le
  * @param {{light:number,sat:number,warm:number,tex:number}} [features] from vision.imageFeatures
  * @returns {{candidates:Array, family:string|null, saw:string[], sure:boolean}}
  */
+/* Whole-plate inference. The labels that fire on a full plate are ingredients
+ * ("meat loaf", "carbonara", "mashed potato"), never a dish name, so the honest
+ * answer is the combination — not a shrug and a form. Evidence is compared by
+ * score, not by category order: a plate whose strongest label is potato must not
+ * become "pasta" because some faint label mentioned carbonara. Returns null when
+ * the photo gives no basis for an answer. */
+const PLATE_RE = {
+  chicken: /chicken|turkey/,
+  fish: /salmon|tuna|fish|shrimp|prawn|crab|lobster|trout|cod|haddock/,
+  meat: /meat loaf|steak|beef|pork|ham|sausage|bacon|burger|mince|lamb/,
+  pasta: /carbonara|spaghetti(?! squash)|pasta|noodle|lasagne|macaroni|fusilli|penne|linguine/,
+  rice: /rice|pilaf|risotto|biryani|paella|curry/,
+  potato: /potato|fries|chips|wedges|mash/,
+  veg: /salad|broccoli|vegetable|greens|asparagus|beans|guacamole|avocado|cucumber|tomato/,
+};
+
+function plateGuess(predictions, fired, plated = false) {
+  const best = (re) => {
+    let score = 0;
+    for (const p of predictions) {
+      const label = norm(String(p.label || '').split(',')[0]);
+      if (re.test(label)) score = Math.max(score, Number(p.score) || 0);
+    }
+    return score;
+  };
+
+  const protein = ['chicken', 'fish', 'meat']
+    .map((k) => ({ k, s: best(PLATE_RE[k]) }))
+    .sort((a, b) => b.s - a.s)[0];
+  const starch = ['rice', 'pasta', 'potato']
+    .map((k) => ({ k, s: best(PLATE_RE[k]) }))
+    .sort((a, b) => b.s - a.s)[0];
+  const vegScore = Math.max(fired.has('salad') ? 0.2 : 0, best(PLATE_RE.veg));
+
+  const pick = (name) => FOODS.find((x) => x.name === name) || null;
+  const STARCH_NAME = { rice: 'Rice (cooked)', pasta: 'Pasta (cooked)', potato: 'Potato (boiled)' };
+  const PROTEIN_NAME = { chicken: 'Chicken', fish: 'Fish', meat: 'Meat' };
+  const MIN = plated ? 0.02 : 0.03;
+
+  // A bowl of vegetables is not a "meat and ..." dish, however faint the meat
+  // label was. Let the strongest single food name itself instead — unless the
+  // frame also carries real protein and starch evidence, which means a whole
+  // dinner that the model only partly named.
+  if (vegScore >= 0.1 && vegScore > protein.s && vegScore > starch.s
+      && (protein.s < 0.1 || starch.s < 0.1)) return null;
+
+  if (starch.s >= MIN && protein.s >= MIN) {
+    const name = `${PROTEIN_NAME[protein.k]} and ${starch.k === 'potato' ? 'potatoes' : starch.k}`;
+    return pick(name);
+  }
+  if (starch.s >= MIN) return pick(STARCH_NAME[starch.k]);
+  if (vegScore >= MIN && protein.k === 'chicken') return pick('Chicken and vegetables');
+  if (vegScore >= MIN && protein.k === 'meat') return pick('Meat and vegetables');
+  return null;
+}
+
 export function matchVisual(predictions, learned = {}, features = null) {
   // Direct hits and shelf guesses are accumulated separately: a family guess
   // must never outrank a real label for the same photo.
@@ -598,6 +669,22 @@ export function matchVisual(predictions, learned = {}, features = null) {
     scored.push({ food: c.food, score, why: c.direct >= fam ? 'direct' : c.famId, famId: c.famId });
   }
 
+  // A plated frame still gets an answer. "Several things" made the user do the
+  // work this feature exists to do, so the combined dish is named instead, with
+  // the individual ingredients kept as one-tap alternatives. Tableware plus a
+  // low-calorie side ("broccoli" 0.54 next to "plate" 0.39) is a whole dinner
+  // that the model only partly named, so it gets the combined estimate too.
+  const ranked = scored.slice().sort((a, b) => b.score - a.score);
+  const leadNow = ranked[0];
+  const sideOnPlate = plated && leadNow && leadNow.score < 0.72 && leadNow.food.kcal < 120;
+  if (mixed || sideOnPlate) {
+    const plate = plateGuess(predictions, fired, plated);
+    if (plate) {
+      const best = Math.max(0, ...scored.map((c) => c.score));
+      scored.push({ food: plate, score: Math.max(0.4, best * 1.15), why: 'plate', famId: null });
+    }
+  }
+
   // A label the user already corrected wins next time. Keyed on the exact
   // top label, so "dough" can mean cinnamon roll without touching "bagel".
   // Skipped on a mixed plate: remembering "dough → cinnamon roll" must not
@@ -633,6 +720,7 @@ export function matchVisual(predictions, learned = {}, features = null) {
     sure: top.why === 'direct' && top.score >= 0.5 && !mixed,
     mixed,
     plated,
+    plate: top.why === 'plate',
   };
 }
 

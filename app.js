@@ -5,9 +5,12 @@ import { render as renderNutrition } from './nutrition.js';
 import { render as renderBody } from './body.js';
 import { render as renderSettings } from './settings.js';
 import { render as renderFriends } from './friends.js';
-import { initAuth, onAuth } from './auth.js';
+import { initAuth, onAuth, auth } from './auth.js';
+import { gateNeeded, noteSignedIn, renderGate } from './gate.js';
 
 const viewEl = document.getElementById('view');
+const gateEl = document.getElementById('gate');
+const appEl = document.getElementById('app');
 const routes = {
   today: renderToday,
   workout: renderWorkout,
@@ -42,6 +45,22 @@ function currentRoute() {
 }
 
 function render() {
+  // The account gate owns the whole screen until there is a signed-in session
+  // (or the phone has been explicitly switched to offline use). Hiding .app
+  // also hides the tab bar, so there is no way around it mid-session.
+  if (gateNeeded()) {
+    gateEl.hidden = false;
+    appEl.hidden = true;
+    document.title = 'ENDURA';
+    gateEl.replaceChildren(renderGate(ctx));
+    return;
+  }
+
+  gateEl.hidden = true;
+  gateEl.replaceChildren();
+  appEl.hidden = false;
+  if (auth.session) noteSignedIn();
+
   const name = currentRoute();
   try {
     const node = routes[name](ctx);
@@ -74,10 +93,11 @@ window.addEventListener('hashchange', schedule);
     toast('Storage unavailable — running read-only', 'err');
   }
   if (!location.hash) location.hash = '#/today';
-  render();
-
-  // Restores a saved session (auto sign-in). No-op when accounts are unconfigured.
+  // Restores a saved session (auto sign-in). Started before the first paint so
+  // the gate can show its splash instead of the app flashing open — the router
+  // re-renders as soon as the session resolves.
   initAuth();
+  render();
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     const register = () => navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW registration failed', e));

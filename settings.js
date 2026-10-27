@@ -8,6 +8,7 @@ import { CLOUD_MODELS } from './vision.js';
 import {
   auth, configureSync, checkBackend, signIn, signUp, signOut, saveUsername,
   enrollTotp, confirmTotp, disableTotp, verifyMfa, refreshFactors, USERNAME_RE,
+  enrollPhone, startChallenge, verifyChallenge,
 } from './auth.js';
 
 const joinedLabel = (iso) => {
@@ -789,6 +790,7 @@ async function openTwoFactor(ctx) {
   const active = factors.find((f) => f.status === 'verified');
 
   if (active) {
+    const isPhone = active.factor_type === 'phone';
     openSheet(`
       <div class="sheet__head">
         <div class="sheet__title">Two-factor authentication</div>
@@ -798,11 +800,12 @@ async function openTwoFactor(ctx) {
         <div class="card card--tight" style="border-color:rgba(160,255,180,.3)">
           <div class="row" style="gap:8px;align-items:center">
             <span class="badge badge--lime">on</span>
-            <span class="tiny muted">Authenticator app · added ${esc(joinedLabel(active.created_at))}</span>
+            <span class="tiny muted">${isPhone ? 'Phone number (SMS)' : 'Authenticator app'} · added ${esc(joinedLabel(active.created_at))}</span>
           </div>
-          <div class="hint" style="margin-top:8px">Signing in asks for a 6-digit code after your password.</div>
+          <div class="hint" style="margin-top:8px">${isPhone
+            ? `Signing in texts a 6-digit code to ${esc(active.phone || 'your number')} after your password.`
+            : 'Signing in asks for the 6-digit code from your authenticator app after your password.'}</div>
         </div>
-        <div class="hint" style="margin-top:10px">Phone-number 2FA needs an SMS provider (Twilio) connected to the project — the authenticator app is the free option and is stronger than SMS.</div>
         <button class="btn btn--sm btn--ghost btn--block" style="margin-top:12px;color:var(--danger)" data-off>Turn off 2FA</button>
       </div>
     `, {
@@ -820,10 +823,141 @@ async function openTwoFactor(ctx) {
     return;
   }
 
-  // not enrolled yet
+  /* Nothing enrolled yet: pick a method. The phone option is offered first-class
+   * because it is what most people expect, but it only works when the project
+   * has an SMS provider — so a failure here explains that instead of pretending. */
   openSheet(`
     <div class="sheet__head">
       <div class="sheet__title">Turn on 2FA</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <div class="hint" style="line-height:1.5">After your password, signing in also asks for a 6-digit code. If someone gets your password, the account still stays shut.</div>
+      <button class="listrow listrow--btn" style="margin-top:12px" data-method="phone">
+        <div class="listrow__main">
+          <div class="listrow__t">Phone number (SMS)</div>
+          <div class="listrow__s">A code is texted to your number each time you sign in</div>
+        </div>
+        ${icon('chevron')}
+      </button>
+      <button class="listrow listrow--btn" style="margin-top:8px" data-method="totp">
+        <div class="listrow__main">
+          <div class="listrow__t">Authenticator app</div>
+          <div class="listrow__s">Free, works offline, no texts to pay for</div>
+        </div>
+        ${icon('chevron')}
+      </button>
+      <div id="twofa-msg" class="hint" style="margin-top:10px;line-height:1.45"></div>
+    </div>
+  `, {
+    onMount(root) {
+      const msg = root.querySelector('#twofa-msg');
+      root.querySelectorAll('[data-method]').forEach((b) => b.addEventListener('click', () => {
+        if (b.dataset.method === 'phone') openPhoneEnrol(ctx);
+        else openTotpEnrol(ctx);
+      }));
+      msg.textContent = '';
+    },
+  });
+}
+
+/* ------------------------------------------------------------- phone enrol */
+
+function openPhoneEnrol(ctx) {
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Phone number 2FA</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <div class="hint" style="line-height:1.5">Type the number that should receive the code. Include the country code — <strong>+1 555 010 9999</strong>, <strong>+44 7700 900123</strong>.</div>
+      <label class="field" style="margin-top:12px"><span class="field__l">Mobile number</span>
+        <input class="input" id="phone-num" type="tel" inputmode="tel" autocomplete="tel" placeholder="+1 555 010 9999"></label>
+      <div id="phone-msg" class="hint" style="margin-top:8px;line-height:1.45"></div>
+    </div>
+    <div class="sheet__foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn--primary" data-send>Send code</button>
+    </div>
+  `, {
+    onMount(root) {
+      const msg = root.querySelector('#phone-msg');
+      const btn = root.querySelector('[data-send]');
+      const fail = (text) => { msg.style.color = 'var(--danger)'; msg.textContent = text; };
+      btn.addEventListener('click', async () => {
+        const phone = root.querySelector('#phone-num').value.trim();
+        msg.style.color = ''; msg.textContent = 'Enrolling…';
+        btn.disabled = true;
+        try {
+          const enr = await enrollPhone(phone);
+          const ch = await startChallenge(enr.id);
+          if (ch.error) throw new Error(ch.error);
+          openPhoneCode(ctx, enr, ch.challengeId, phone);
+        } catch (err) {
+          const raw = String((err && err.message) || err);
+          const smsMissing = /sms|twilio|provider|not enabled|unsupported|phone.*(disabled|not)/i.test(raw);
+          fail(smsMissing
+            ? 'This project has no SMS provider set up, so no code can be texted. In Supabase: Authentication → Providers → Phone, connect Twilio. Until then use the authenticator app — it is free and asks for a code the same way.'
+            : raw);
+          btn.disabled = false;
+        }
+      });
+    },
+  });
+}
+
+function openPhoneCode(ctx, enrollment, challengeId, phone) {
+  let chId = challengeId;
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Enter the code</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <div class="hint">We texted a 6-digit code to <strong>${esc(phone)}</strong>.</div>
+      <label class="field" style="margin-top:12px"><span class="field__l">Code</span>
+        <input class="input input--num" id="phone-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></label>
+      <div id="phone-code-msg" class="hint" style="margin-top:8px"></div>
+    </div>
+    <div class="sheet__foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn--primary" data-confirm>Turn on</button>
+    </div>
+  `, {
+    onMount(root) {
+      const msg = root.querySelector('#phone-code-msg');
+      root.querySelector('[data-confirm]').addEventListener('click', async () => {
+        msg.style.color = 'var(--danger)';
+        msg.textContent = 'Checking…';
+        const res = await verifyChallenge(enrollment.id, chId, root.querySelector('#phone-code').value);
+        if (res.error) { msg.textContent = res.error; return; }
+        await refreshFactors();
+        closeSheet();
+        toast('2FA is on — codes go to your phone', 'ok');
+        ctx.rerender();
+      });
+      const again = document.createElement('button');
+      again.className = 'btn btn--bare tiny';
+      again.style.cssText = 'margin-top:8px;text-decoration:underline';
+      again.textContent = 'Send a new code';
+      again.addEventListener('click', async () => {
+        const r = await startChallenge(enrollment.id);
+        if (r.error) { msg.style.color = 'var(--danger)'; msg.textContent = r.error; return; }
+        chId = r.challengeId;
+        msg.style.color = 'var(--accent)';
+        msg.textContent = 'New code sent.';
+      });
+      root.querySelector('#phone-code-msg').after(again);
+    },
+  });
+}
+
+/* -------------------------------------------------------------- totp enrol */
+
+async function openTotpEnrol(ctx) {
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Authenticator app</div>
       <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
     </div>
     <div class="sheet__body">
@@ -837,7 +971,7 @@ async function openTwoFactor(ctx) {
   } catch (err) {
     openSheet(`
       <div class="sheet__head">
-        <div class="sheet__title">Turn on 2FA</div>
+        <div class="sheet__title">Authenticator app</div>
         <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
       </div>
       <div class="sheet__body"><div class="hint" style="color:var(--danger)">${esc(err.message || String(err))}</div></div>
@@ -847,7 +981,7 @@ async function openTwoFactor(ctx) {
 
   openSheet(`
     <div class="sheet__head">
-      <div class="sheet__title">Turn on 2FA</div>
+      <div class="sheet__title">Authenticator app</div>
       <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
     </div>
     <div class="sheet__body">

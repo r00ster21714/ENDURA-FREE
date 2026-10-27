@@ -213,14 +213,11 @@ export function openScanner(ctx) {
           const features = imageFeatures(full.canvas);
           const match = matchVisual(preds, state.learned, features);
           busy(false);
-          // A 0.02-score guess dressed up as an answer is worse than asking.
-          // Shelf guesses need more evidence than a label that names a food:
-          // "spatula 0.83" expands to Broccoli 0.14, which is not a meal.
-          const top = match.candidates[0];
-          const floor = top && top.why === 'direct' ? 0.18 : 0.15;
-          const weak = !top || top.score < floor;
-          if (weak) {
-            showNoMatch(sheetRoot, thumb.dataUrl, match, ctx, !match.candidates.length ? 'unknown' : 'weak');
+          // Only a frame with nothing recognisable falls back to "pick the
+          // food". Any candidate is named with its macros — a low-confidence
+          // label is still an answer, and the alternatives are one tap away.
+          if (!match.candidates.length) {
+            showNoMatch(sheetRoot, thumb.dataUrl, match, ctx);
           } else {
             showCandidates(sheetRoot, match, thumb.dataUrl, ctx);
           }
@@ -256,15 +253,15 @@ function showScanError(root, message, ctx) {
   });
 }
 
-function showNoMatch(root, photo, match, ctx, reason = 'unknown') {
+function showNoMatch(root, photo, match, ctx) {
   const top = match.saw.join(', ');
   const box = root.querySelector('#scan-result');
   box.innerHTML = `
     <div class="card">
-      <div style="font-weight:650;font-size:14px">${reason === 'weak' ? 'Not confident enough' : 'Not sure what that is'}</div>
-      <div class="tiny muted" style="margin-top:4px">${reason === 'weak'
-        ? `The model hesitated between ${esc(top || 'a few guesses')}, none strongly enough to call it. Pick the food from the list — the nutrition fills itself in, and the photo isn't saved.`
-        : `The model guessed ${esc(top || 'nothing')}, which isn't in the food list. Pick the food from the list — the nutrition fills itself in, and the photo isn't saved.`}</div>
+      <div style="font-weight:650;font-size:14px">Not sure what that is</div>
+      <div class="tiny muted" style="margin-top:4px">${top
+        ? `The model saw ${esc(top)}, none of which is in the food table. Pick the food and the calories and macros fill themselves in — the photo isn't saved.`
+        : 'Nothing recognisable in that frame. Pick the food and the calories and macros fill themselves in — the photo isn\'t saved.'}</div>
       <button class="btn btn--sm btn--primary" style="margin-top:12px" data-search>Pick the food</button>
       <button class="btn btn--sm btn--ghost" style="margin-top:8px" data-plate>It's a plate with several things</button>
     </div>`;
@@ -538,21 +535,25 @@ export function openPlateBuilder(ctx, { photo = null, scanLabel = null, suggest 
   });
 }
 
-/* One answer, not a quiz, but never a confident lie: a plated frame with
-   several savoury signals is reported as a mixed plate and split into parts. */
+/* The scanner's job is to answer, not to interview. Every result names the food
+   and states its calories and macros; the plate builder is a secondary "exact
+   portions" option for someone who wants to split a meal, never the default.
+   A plated frame gets a composite dish name ("Meat and rice") instead of a
+   shrug or a form. */
 function showCandidates(root, match, photo, ctx) {
-  const { candidates, saw, sure, family, mixed, plated } = match;
+  const { candidates, saw, sure, family, mixed } = match;
   const box = root.querySelector('#scan-result');
   const lead = candidates[0];
   const alts = candidates.slice(1, 4);
   const scanLabel = saw[0] || null;
+  const isPlate = lead && lead.why === 'plate';
 
   const openFood = (food) => {
     closeSheet();
     openPortionSheet(food, ctx, { photo, source: 'scan', scanLabel });
   };
 
-  const suggest = candidates.filter((c) => c.score >= 0.3).slice(0, 3).map((c) => c.food.name);
+  const suggest = candidates.filter((c) => c.score >= 0.3).slice(0, 4).map((c) => c.food.name);
   const openPlate = () => {
     closeSheet();
     setTimeout(() => openPlateBuilder(ctx, { photo, scanLabel, suggest }), 40);
@@ -563,53 +564,31 @@ function showCandidates(root, match, photo, ctx) {
     setTimeout(() => openFoodPicker(ctx, { photo, scanLabel, candidates, heading: 'What was it?' }), 40);
   };
 
-  const foot = `
-    <button class="btn btn--ghost btn--sm btn--block" data-change style="margin-top:10px">Not right? Choose the food</button>
-    <div class="tiny muted" style="margin-top:10px;text-align:center">The photo isn't saved.</div>`;
-
-  // Mixed plate: do not name a dish at all. Naming one is how steak and rice
-  // became a cinnamon roll.
-  if (mixed) {
-    const guess = lead && lead.score >= 0.3 ? lead : null;
-    box.innerHTML = `
-      <div style="text-align:center;padding:8px 0 0">
-        <div class="tiny muted">This looks like a plated meal</div>
-        <div class="scan-answer__name">Several things</div>
-        <div class="tiny muted" style="margin-top:2px;line-height:1.45">One photo can't separate the parts, so the scanner won't pretend it can. Tap what was on the plate and the macros come out right.</div>
-      </div>
-      <button class="btn btn--primary btn--block" data-plate style="margin-top:16px">Build the plate</button>
-      ${guess ? `
-        <div class="label" style="margin:14px 0 6px">If it was one dish</div>
-        <button class="listrow listrow--btn" data-log>
-          <div class="listrow__main">
-            <div class="listrow__t">${esc(guess.food.name)}</div>
-            <div class="listrow__s">${Math.round(guess.food.kcal)} kcal · ${Math.round(guess.food.protein)}P ${Math.round(guess.food.carbs)}C ${Math.round(guess.food.fat)}F</div>
-          </div>
-        </button>` : ''}
-      ${foot}`;
-    const plateBtn = box.querySelector('[data-plate]');
-    if (plateBtn) plateBtn.addEventListener('click', openPlate);
-    const logBtn = box.querySelector('[data-log]');
-    if (logBtn) logBtn.addEventListener('click', () => guess && openFood(guess.food));
-    const change = box.querySelector('[data-change]');
-    if (change) change.addEventListener('click', drawPicker);
-    return;
-  }
+  const kicker = isPlate
+    ? 'Plate detected · combined dish'
+    : sure
+      ? 'This is'
+      : family
+        ? `Looks like ${esc(family)} · best guess`
+        : 'Best guess';
 
   box.innerHTML = `
     <div style="text-align:center;padding:8px 0 0">
-      <div class="tiny muted">${sure ? 'This is' : family ? `Looks like ${esc(family)} · best guess` : 'Best guess'}</div>
+      <div class="tiny muted">${kicker}</div>
       <div class="scan-answer__name">${esc(lead.food.name)}</div>
       <div class="scan-answer__sub">${Math.round(lead.food.kcal)} kcal per ${lead.food.serveG} g · ${Math.round(lead.food.protein)} P / ${Math.round(lead.food.carbs)} C / ${Math.round(lead.food.fat)} F</div>
+      ${isPlate ? '<div class="tiny muted" style="margin-top:4px">Estimate for a whole serving — edit the grams if yours was bigger or smaller.</div>' : ''}
     </div>
     <button class="btn btn--primary btn--block" data-log style="margin-top:16px">Add ${esc(lead.food.name)}</button>
     ${alts.length ? `
-      <div class="label" style="margin:14px 0 6px">Not it? One tap</div>
+      <div class="label" style="margin:14px 0 6px">${isPlate ? 'Or it was one of these' : 'Not it? One tap'}</div>
       <div class="row" style="gap:6px;flex-wrap:wrap">
         ${alts.map((c, i) => `<button class="pill" data-quick="${i}">${esc(c.food.name)}</button>`).join('')}
       </div>` : ''}
-    <button class="btn btn--sm btn--ghost btn--block" data-plate style="margin-top:8px">It's a plate with several things</button>
-    ${foot}`;
+    <button class="btn btn--sm btn--ghost btn--block" data-plate style="margin-top:10px">${isPlate ? 'Split the plate — exact portions' : "It's a plate with several things"}</button>
+    <button class="btn btn--ghost btn--sm btn--block" data-change style="margin-top:6px">Not right? Choose the food</button>
+    <div class="tiny muted" style="margin-top:10px;text-align:center">The photo isn't saved.</div>`;
+
   box.querySelector('[data-log]').addEventListener('click', () => openFood(lead.food));
   box.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => {
     openFood(alts[Number(b.dataset.quick)].food);

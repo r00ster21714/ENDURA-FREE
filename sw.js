@@ -1,6 +1,6 @@
 ﻿/* ENDURA service worker â€” offline shell + model cache */
 
-const VERSION = 'en-v11';
+const VERSION = 'en-v12';
 const CDN_CACHE = 'endura-cdn';
 const SHELL = [
   './',
@@ -14,6 +14,7 @@ const SHELL = [
   'rest.js',
   'common.js',
   'auth.js',
+  'gate.js',
   'friends.js',
   'today.js',
   'workout.js',

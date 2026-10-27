@@ -45,6 +45,35 @@ svg.ic{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;str
 .view{flex:1;padding:14px 16px calc(var(--tab-h) + 18px);outline:none}
 .view--flush{padding-left:0;padding-right:0}
 
+/* ---------- account gate ---------- */
+/* Shown instead of the whole app — including the tab bar — until a session
+   exists. Nothing about local data changes; this only controls entry. */
+.gate{
+  position:relative;z-index:1;min-height:100dvh;
+  display:flex;align-items:center;justify-content:center;
+  padding:calc(26px + env(safe-area-inset-top)) 20px calc(26px + env(safe-area-inset-bottom));
+}
+.gate__inner{width:100%;max-width:400px;display:flex;flex-direction:column;animation:fade .3s ease}
+.gate__brand{text-align:center;margin-bottom:28px}
+.gate__logo{font-size:32px;font-weight:800;letter-spacing:.16em;line-height:1}
+.gate__logo span{color:var(--accent)}
+.gate__tag{font-size:12px;color:var(--muted);margin-top:9px;letter-spacing:.02em}
+.gate__pitch{display:flex;flex-direction:column;gap:11px;margin-bottom:28px}
+.gate__point{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--muted);line-height:1.4}
+.gate__point svg.ic{width:17px;height:17px;color:var(--accent);margin-top:1px}
+.gate__title{font-size:22px;font-weight:720;letter-spacing:-.02em;margin:0 0 18px}
+.gate__sub{font-size:13.5px;color:var(--muted);margin-bottom:4px;line-height:1.45}
+.gate__cta{margin-top:14px;min-height:50px}
+.gate__cta--ghost{margin-top:9px}
+.gate__swap{margin-top:12px;align-self:center;font-size:13px}
+.gate__trouble{color:var(--muted-2);font-size:12px;margin-top:22px}
+.gate__err{margin-top:10px;line-height:1.45;color:var(--danger);font-size:12.5px}
+.gate__err:empty{display:none}
+.gate__back{align-self:flex-start;margin-bottom:16px;font-size:13px;display:inline-flex;gap:4px;align-items:center}
+.gate__back svg.ic{width:16px;height:16px}
+.gate__splash{display:flex;flex-direction:column;align-items:center;gap:10px;padding:80px 0}
+.gate__code{font-size:21px;letter-spacing:.3em;text-align:center}
+
 /* ---------- tabbar ---------- */
 .tabbar{
   position:fixed;left:0;right:0;bottom:0;z-index:30;

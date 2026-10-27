@@ -169,6 +169,10 @@ export const dbClear = (store) => run(store, 'readwrite', (os) => os.clear());
 
 /* ---------------- state ---------------- */
 
+/* The accounts server ships with the app so a fresh install can create an
+ * account without pasting anything. The publishable key is public by design —
+ * row-level security is what protects the rows. These are only the defaults;
+ * a device that already saved its own values keeps them. */
 export const DEFAULT_SETTINGS = {
   units: 'metric',
   targets: { kcal: 2400, protein: 160, carbs: 260, fat: 70 },
@@ -177,7 +181,10 @@ export const DEFAULT_SETTINGS = {
   goalWeightKg: null,
   barKg: 20,
   cloud: { provider: 'none', model: '' },
-  sync: { url: '', key: '' },
+  sync: {
+    url: 'https://npeinkgyioxlgotmwqea.supabase.co',
+    key: 'sb_publishable_vvsQjcOBHNjhtwIopVJK-w_zbunWTCA',
+  },
   onboarded: false,
 };
 
@@ -227,6 +234,9 @@ function mergeSettings(base, patch) {
   out.targets = { ...base.targets, ...(patch.targets || {}) };
   out.cloud = { ...base.cloud, ...(patch.cloud || {}) };
   out.sync = { ...base.sync, ...(patch.sync || {}) };
+  // A saved blank must not erase the built-in server: an install that predates
+  // the baked-in config would otherwise be left with no accounts at all.
+  if (!out.sync.url || !out.sync.key) out.sync = { ...base.sync, ...(out.sync.url ? { url: out.sync.url } : {}), ...(out.sync.key ? { key: out.sync.key } : {}) };
   return out;
 }
 
