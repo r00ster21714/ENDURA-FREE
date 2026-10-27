@@ -194,17 +194,21 @@ with Remove. Requests are rows in `friendships`; RLS lets only the two people in
   SMS provider (Twilio) connected to the Supabase project; if there isn't one, the sheet says so
   and points back to the authenticator app instead of failing silently.
 
-Either factor is required at the next sign-in (the gate asks for it after the password), and both
-can be turned off again from **You → Manage 2FA**.
+Either factor is required at the next sign-in — the gate asks for it after the password, a wrong code
+says *Invalid TOTP code* and lets you retry without signing in again. **You → Manage 2FA** switches
+between the two methods in one tap (the old factor is removed first, so the gate only ever has one
+prompt), and turns 2FA off again.
 
 The public key (publishable or legacy anon) is public by design; RLS is what protects the rows. The
 secret / service-role key is never used in the app.
 
-Verified against the live project: the key is accepted, `username_taken()` answers, `profiles` and
-`friendships` exist, anon cannot read profiles ("Test connection" reports all three), the gate hides
-the app and tab bar on launch, a wrong password keeps the typed email and shows the server's error,
-and first-run/sign-in/2FA screens render with zero console errors. An end-to-end sign-up still needs
-**Confirm email** turned off in the project (see step 3).
+Verified against the live project, end to end: sign-up lands straight in the app with a session,
+a reload stays signed in, **Sign out** returns to the gate (never the first-run greeting), signing
+back in asks for the TOTP code, a wrong code shows *Invalid TOTP code* and the correct one on the
+next try still opens the app, the phone method explains the missing SMS provider instead of failing
+silently, and the app hides behind the gate with nothing in the console. The key is accepted,
+`username_taken()` answers, `profiles` and `friendships` exist, and anon cannot read profiles
+("Test connection" reports all three).
 
 ## What is stored
 
