@@ -806,7 +806,8 @@ async function openTwoFactor(ctx) {
             ? `Signing in texts a 6-digit code to ${esc(active.phone || 'your number')} after your password.`
             : 'Signing in asks for the 6-digit code from your authenticator app after your password.'}</div>
         </div>
-        <button class="btn btn--sm btn--ghost btn--block" style="margin-top:12px;color:var(--danger)" data-off>Turn off 2FA</button>
+        <button class="btn btn--sm btn--ghost btn--block" style="margin-top:6px" data-switch>${isPhone ? 'Use an authenticator app instead' : 'Use phone number (SMS) instead'}</button>
+        <button class="btn btn--sm btn--ghost btn--block" style="margin-top:6px;color:var(--danger)" data-off>Turn off 2FA</button>
       </div>
     `, {
       onMount(root) {
@@ -817,6 +818,16 @@ async function openTwoFactor(ctx) {
           closeSheet();
           toast('2FA turned off');
           ctx.rerender();
+        });
+        // Switching method means removing the old factor first: the gate reads
+        // the first verified factor, so two of them would fight over the prompt.
+        root.querySelector('[data-switch]').addEventListener('click', async () => {
+          const res = await disableTotp(active.id);
+          if (res.error) { toast(res.error, 'err'); return; }
+          await refreshFactors();
+          closeSheet();
+          ctx.rerender();
+          setTimeout(() => (isPhone ? openTotpEnrol(ctx) : openPhoneEnrol(ctx)), 60);
         });
       },
     });
@@ -895,10 +906,15 @@ function openPhoneEnrol(ctx) {
           openPhoneCode(ctx, enr, ch.challengeId, phone);
         } catch (err) {
           const raw = String((err && err.message) || err);
-          const smsMissing = /sms|twilio|provider|not enabled|unsupported|phone.*(disabled|not)/i.test(raw);
-          fail(smsMissing
-            ? 'This project has no SMS provider set up, so no code can be texted. In Supabase: Authentication → Providers → Phone, connect Twilio. Until then use the authenticator app — it is free and asks for a code the same way.'
-            : raw);
+          // GoTrue says "MFA enroll is disabled for Phone" when the project has
+          // no SMS provider, which reads like a bug to whoever sees it.
+          const badNumber = /invalid|format|e\.?164|not a valid/i.test(raw);
+          const smsMissing = /disabled|sms|twilio|provider|unsupported|not enabled/i.test(raw);
+          fail(badNumber
+            ? 'That number was rejected. Use the full international format with no spaces — +1 555 010 9999 or +44 7700 900123.'
+            : smsMissing
+              ? 'This project has no SMS provider set up, so no code can be texted. In Supabase: Authentication → Sign In / Providers → Phone, connect Twilio. Until then use the authenticator app — it is free and asks for a code the same way.'
+              : raw);
           btn.disabled = false;
         }
       });
