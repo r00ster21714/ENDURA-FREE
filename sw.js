@@ -1,6 +1,6 @@
 /* ENDURA service worker — offline shell + model cache */
 
-const VERSION = 'en-v13';
+const VERSION = 'en-v14';
 const CDN_CACHE = 'endura-cdn';
 const SHELL = [
   './',
@@ -32,7 +32,10 @@ const SHELL = [
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(VERSION)
-      .then((cache) => cache.addAll(SHELL))
+      // cache: 'reload' skips the HTTP cache. Without it a phone that updates
+      // minutes after a deploy can precache the previous build's files under the
+      // new version name and stay stale until the next bump.
+      .then((cache) => cache.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
       .then(() => self.skipWaiting())
       .catch((err) => console.warn('precache incomplete', err))
   );
