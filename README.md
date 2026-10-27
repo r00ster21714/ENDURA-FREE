@@ -305,13 +305,24 @@ Tested in Chromium against a local server:
 - Friends tab still renders `0 friends / No friends yet` before the migration, because
   `friendsOverview()` retries without the `close` column instead of failing the whole tab
 
+Close friends, end to end on the live project with two throwaway accounts (`@selftest_a`,
+`@selftest_b`):
+
+- request sent from B → Accept on A → both lists show the friend, no console errors
+- `Close friend` in the friend sheet persists to `friendships.close` and the badge shows on B's
+  list too; tapping it again clears it for both
+- B opens **See their week** and reads A's meals (newest first, with grams and kcal), the daily
+  average macros, and the training block — the body block is absent because its switch is off
+- with `close` turned off, `fetchWeek(A)` returns `null` and a direct `select` on `shared_weeks`
+  returns only B's own row: the lock is RLS, not the UI
+- sections verified against the stored row: meals off → payload loses `meals`; workouts off →
+  loses `workouts`; body on with a weigh-in → adds `body` (80.4 kg / 18% / waist 84); master off
+  deletes the row entirely
+- viewer honours the payload's units: `80.4 kg` / `12,800 kg` metric vs `177.3 lb` / `28,219 lb`
+  imperial, waist `84 cm` vs `33.1 in`
+
 Not verified here: real camera capture on iOS/Android, audio beep volume, install prompt on a
-physical device, cloud estimation with a live API key, a real friend request between two accounts,
-and the close-friend read path — that one needs `shared_weeks` to exist in the project first
-(`tools/supabase-setup.sql`), which only the project owner can run. The switches, the payload
-builder, the friend sheet and the week viewer are tested locally, and the Friends tab loads
-against the live project both before and after the migration (it retries without `close` when the
-column is missing).
+physical device, and cloud estimation with a live API key.
 
 ## Known gaps
 
