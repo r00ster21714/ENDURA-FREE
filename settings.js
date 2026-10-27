@@ -197,7 +197,7 @@ export function render(ctx) {
         <span class="badge ${cloud.provider !== 'none' ? 'badge--lime' : 'badge--muted'}">${cloud.provider === 'none' ? 'on-device' : esc(CLOUD_LABELS[cloud.provider] || cloud.provider)}</span>
       </div>
       <div class="seg" id="prov-seg" style="flex-wrap:wrap">
-        <button data-prov="gemini" aria-pressed="${cloud.provider === 'gemini'}">Gemini · free</button>
+        <button data-prov="gemini" aria-pressed="${cloud.provider === 'gemini'}">Gemini</button>
         <button data-prov="anthropic" aria-pressed="${cloud.provider === 'anthropic'}">Anthropic</button>
         <button data-prov="openai" aria-pressed="${cloud.provider === 'openai'}">OpenAI</button>
         <button data-prov="none" aria-pressed="${cloud.provider === 'none'}">On-device</button>
