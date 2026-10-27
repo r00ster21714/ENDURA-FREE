@@ -1,8 +1,8 @@
 # ENDURA
 
 Offline-first training, nutrition and body tracker that installs to a phone home screen.
-No framework, no build step, no accounts, no server-side data. Everything you log stays in
-IndexedDB on the device.
+No framework, no build step. A free Supabase project holds accounts, usernames, friends and 2FA
+factors; everything you log stays in IndexedDB on the device.
 
 ```
 index.html              app shell + SVG icon sprite
@@ -15,6 +15,9 @@ data.js                 114-food nutrition table, 66-exercise library, search + 
 vision.js               on-device classifier + Anthropic/OpenAI estimation
 charts.js               canvas line chart (no chart library)
 rest.js                 global rest timer (WebAudio beep + vibration)
+gate.js                 account gate: first-run, sign-up, sign-in, 2FA
+auth.js                 Supabase client, session, username, 2FA, connection test
+friends.js              friend search, requests, friend list
 today.js workout.js nutrition.js body.js settings.js common.js
                         the five screens plus their shared UI helpers
 icon-*.png favicon-32.png apple-touch-icon.png
@@ -76,13 +79,21 @@ guess honest:
   roll.
 
 When the photo looks like a **plated meal** — tableware plus one or more savoury shelves (meat,
-rice/noodles, salad, fast food, breakfast) — the scanner stops trying to name one dish:
+rice/noodles, salad, fast food, breakfast) — the scanner still answers. It names the **combined
+dish** from the evidence, with its macros:
 
-> *This looks like a plated meal — Several things.*
-> **Build the plate** → tap the parts (protein / carbs / veg / extras), 0.5×–2× each, see the real
-> combined kcal · P C F, **Add 3 items**.
+> *Plate detected · combined dish*
+> **Meat and potatoes** — 580 kcal per 400 g · 32 P / 52 C / 24 F
+> **Add Meat and potatoes**
 
-Steak + rice + broccoli is therefore three taps and 510 kcal / 32P 52C 19F, not one wrong guess.
+The combination is chosen by comparing label scores, not by category order, and the ingredients the
+model actually saw stay as one-tap alternatives (Potato, Broccoli, Pasta). A plate that is clearly
+tableware but comes back as a low-calorie side ("broccoli" beside "plate") gets the combined estimate
+too, because 34 kcal is not a dinner. **Split the plate — exact portions** is still there as a
+secondary button for anyone who wants to weigh the parts: tap protein / carbs / veg / extras,
+0.5×–2× each, see the real combined kcal · P C F.
+
+Steak + rice + broccoli is therefore one tap to log an estimate, or three taps for an exact split.
 The builder is also always available from a normal answer, the food picker and the no-match screen.
 
 A confident single label ("pizza 1.00", "carbonara 0.86") still answers directly, and the result
@@ -107,8 +118,9 @@ Other mechanics:
   "coffee cake", while "chocolate chip cookie" is still a Cookie.
 - **Tableware filter** — "plate", "tray", "menu", "restaurant" are skipped instead of eating a
   candidate slot, and instead feed the mixed-plate detector.
-- **Honest refusal** — a shelf guess built from one weak label ("spatula 0.83" → Broccoli 0.14)
-  now says *Not confident enough* and offers the picker/plate builder rather than inventing food.
+- **Always an answer** — a weak-but-real match is still named, with its kcal and macros and a
+  *Best guess* kicker, plus one-tap alternatives and the picker. Only a photo with no usable label
+  at all says *Not sure what that is*; the app never answers a food photo with a form.
 
 114 foods, including the bakery shelf people actually photograph and the components used by the
 plate builder.
@@ -121,16 +133,18 @@ Verified with real photos through the on-device model (not just synthetic labels
 | pasta | **This is Pasta (cooked)** |
 | burger | **This is Cheeseburger** |
 | cinnamon rolls | **Best guess Cinnamon roll** (from a "coil, spiral" label) |
-| steak dinner | *plated meal* → Build the plate |
-| salad bowl | *plated meal* → Build the plate |
+| steak + rice | **Meat and potatoes** — 580 kcal, plate estimate |
+| chicken + rice + potatoes | **Meat and potatoes** — 580 kcal, plate estimate |
+| salad bowl | **Best guess Avocado** (alternatives: Broccoli, Salad (mixed)) |
 | pan of rice | *Not confident enough* → picker/plate |
 | `hammer`, `chambered nautilus` | no bogus food |
 
 Plate builder verified end to end: steak 100 g + rice 158 g + broccoli 100 g → 510 kcal,
 32 P / 52 C / 19 F, three meal rows logged, zero console errors.
 
-Limits: it recognises *dishes*, not portions, and a mixed plate needs the builder. The gram field
-is what makes the number right.
+Limits: it names a dish and a per-100 g estimate — not your portion. The gram field is what makes
+the number right. A plate of several things gets the combined estimate; the builder splits it
+exactly.
 
 **Cloud (optional key).** The photo goes to Anthropic or OpenAI and comes back with per-item
 grams and macros, which you can scale or edit before logging. Anthropic works directly from the
@@ -140,42 +154,57 @@ that and suggests the alternatives. Keys are stored locally and sent only to the
 
 ## Accounts, friends and 2FA
 
-Optional. With accounts off, everything else works exactly as before; the account only holds an
-email, a username, friend links and a 2FA factor — never training data.
+Every install starts on the account screen. There is no "skip": the app is closed behind a gate
+until a session exists, so the first thing anyone sees is **Create an account**. The account only
+holds an email, a username, friend links and a 2FA factor — never training data.
 
-1. Create a free project at supabase.com (free tier, no card).
+The backend ships with the app (`DEFAULT_SETTINGS.sync` in `core.js`), so a fresh install needs no
+setup sheet. To use a different project: **You → Change**, paste the URL and key, **Connect**. The
+setup sheet reports what it actually found — reachable, key accepted, setup SQL installed.
+
+1. Supabase project (free tier, no card).
 2. SQL editor → run `tools/supabase-setup.sql` once. It creates `profiles` and `friendships` with
    row-level security, a unique `lower(username)` index, `username_taken()` and the
    `handle_new_user` trigger.
-3. Project Settings → **API Keys** → copy the **Project URL** (`https://<project-ref>.supabase.co` —
+3. Authentication → Sign In / Up → turn **Confirm email** off. The bundled email service only
+   delivers to project members, so leaving it on means nobody else can finish signing up.
+4. Project Settings → **API Keys** → copy the **Project URL** (`https://<project-ref>.supabase.co` —
    the ref is the project ID, but the URL is the whole address, not just the ID) and the
    **publishable** key (`sb_publishable_…`). Older projects label the same thing **anon public**;
    either works. The SDK is `@supabase/supabase-js@2.118`, which supports both.
-4. In the app: **You → Set up accounts** → paste both → **Connect**.
 
-Then **Create account** (username + email + password) or **Sign in**. The session is persisted
-(`persistSession`, storage key `endura.auth`), so the app opens already signed in. **You** shows the
-profile card — @username, email, joined date, 2FA state — with **Change username**, **Friends**,
-**Manage 2FA** and **Sign out of account**. Signing out clears the session only: workouts, meals,
-measurements and scanner memory stay on the phone.
+First launch: **Create an account** (username + email + password) or **I already have one**. After
+that the session is persisted (`persistSession`, storage key `endura.auth`), so every later launch
+opens straight into the app. **Sign out** is the only way back to the account screen, and signing
+out always lands on **Sign in** — never on the first-run greeting. Signing out clears the session
+only: workouts, meals, measurements and scanner memory stay on the phone.
+
+If the server cannot be reached, **Trouble signing in? → Use ENDURA offline** unblocks the local
+app; You keeps offering sign-in and the next successful sign-out clears the escape flag.
 
 **Friends** is its own tab: your @username with a copy button, live prefix search (2+ characters)
 with relation badges (Add / pending / friends / accept), incoming requests, and the friend list
 with Remove. Requests are rows in `friendships`; RLS lets only the two people involved read them.
 
-**2FA** is TOTP (Google Authenticator, 1Password, iOS Passwords → Set up code): reveal the secret,
-confirm with a 6-digit code, required at next sign-in, and reversible. Phone-number/SMS 2FA is not
-offered because it needs an SMS provider (Twilio) with a card on file — the in-app copy says so
-rather than pretending.
+**2FA** is chosen when you turn it on:
+
+- **Authenticator app** (default *free* path): TOTP — Google Authenticator, 1Password, iOS
+  Passwords → Set up code. Reveal the secret, confirm with a 6-digit code.
+- **Phone number (SMS)**: enter the international number, confirm the texted code. This needs an
+  SMS provider (Twilio) connected to the Supabase project; if there isn't one, the sheet says so
+  and points back to the authenticator app instead of failing silently.
+
+Either factor is required at the next sign-in (the gate asks for it after the password), and both
+can be turned off again from **You → Manage 2FA**.
 
 The public key (publishable or legacy anon) is public by design; RLS is what protects the rows. The
 secret / service-role key is never used in the app.
 
-Verified locally against a dummy project URL (no real project yet): 6 tabs render, Friends shows
-"Accounts are off", You shows "NOT SET UP", setup sheet accepts URL + key and flips to
-"SIGNED OUT" with Sign in / Create account, sign-in surfaces the network error in-sheet, zero
-console errors except the expected failed request. A live sign-up/friend/2FA pass still needs a
-real project.
+Verified against the live project: the key is accepted, `username_taken()` answers, `profiles` and
+`friendships` exist, anon cannot read profiles ("Test connection" reports all three), the gate hides
+the app and tab bar on launch, a wrong password keeps the typed email and shows the server's error,
+and first-run/sign-in/2FA screens render with zero console errors. An end-to-end sign-up still needs
+**Confirm email** turned off in the project (see step 3).
 
 ## What is stored
 
@@ -203,8 +232,11 @@ Tested in Chromium against a local server:
 - start session → add Bench press → set 60 kg × 8 → rest timer starts at 2:30 → finish → history
 - add food (search → portion → 1.5× scale → log) → macro ring and meal list update
 - photo → on-device model → `Pizza (cheese)` first, `likely` → 1.5× portion → 428 kcal logged
-- real steak-dinner photo → *plated meal* card, no dish named; **Build the plate** → steak + rice
-  + broccoli → 510 kcal / 32P 52C 19F, three rows logged
+- real steak-dinner photo → **Meat and potatoes**, 580 kcal / 32P 52C 24F, one tap to log; the
+  **Split the plate** route still yields steak + rice + broccoli → 510 kcal / 32P 52C 19F, three rows
+- real chicken/rice/potato dinner → **Meat and potatoes** (broccoli 0.42, meat loaf 0.02,
+  mashed potato 0.04 — the sides alone would have said "Broccoli, 34 kcal")
+- real salad bowl → **Best guess Avocado**, alternatives Broccoli / Salad (mixed) / Cauliflower
 - real pan-of-rice photo → *Not confident enough*, no invented Broccoli
 - real cinnamon-roll photo → **Cinnamon roll** via a "coil, spiral" label plus the bakery shelf
 - `dough` label alone → **Sourdough bread**; steak-and-rice labels (`plate` + `dough` +
@@ -218,7 +250,7 @@ Tested in Chromium against a local server:
 - meal write with a `photo` field → record in IndexedDB has none; old thumbnails purged on boot
 - target calculator: BMR 1826 / maintenance 2831 → targets 2830 kcal, 157 P / 359 C / 85 F
 - body chart renders (canvas 532 px, painted), heatmap 112 cells
-- service worker active, 23 files precached, app reloads with the server stopped
+- service worker active, 24 files precached, app reloads with the server stopped
 - rebrand: manifest, title, header and export are ENDURA (`en-v1`); old `ft-v8`
   cache is evicted on first load and the IndexedDB name is kept on purpose so
   existing logs survive
