@@ -177,6 +177,7 @@ export const DEFAULT_SETTINGS = {
   goalWeightKg: null,
   barKg: 20,
   cloud: { provider: 'none', model: '' },
+  sync: { url: '', key: '' },
   onboarded: false,
 };
 
@@ -225,6 +226,7 @@ function mergeSettings(base, patch) {
   const out = { ...base, ...patch };
   out.targets = { ...base.targets, ...(patch.targets || {}) };
   out.cloud = { ...base.cloud, ...(patch.cloud || {}) };
+  out.sync = { ...base.sync, ...(patch.sync || {}) };
   return out;
 }
 

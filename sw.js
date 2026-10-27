@@ -1,6 +1,6 @@
 ﻿/* ENDURA service worker â€” offline shell + model cache */
 
-const VERSION = 'en-v8';
+const VERSION = 'en-v10';
 const CDN_CACHE = 'endura-cdn';
 const SHELL = [
   './',
@@ -13,6 +13,8 @@ const SHELL = [
   'vision.js',
   'rest.js',
   'common.js',
+  'auth.js',
+  'friends.js',
   'today.js',
   'workout.js',
   'nutrition.js',

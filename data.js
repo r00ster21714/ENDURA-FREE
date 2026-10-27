@@ -16,11 +16,11 @@ const food = (name, kcal, protein, carbs, fat, serveG, aliases = [], serveLabel 
 
 /* values are per listed serving; per100 is derived */
 export const FOODS = [
-  food('Chicken breast', 165, 31, 0, 3.6, 100, ['chicken', 'grilled chicken', 'roast chicken']),
+  food('Chicken breast', 165, 31, 0, 3.6, 100, ['chicken', 'grilled chicken', 'roast chicken', 'roast chicken breast', 'chicken fillet']),
   food('Chicken thigh', 209, 26, 0, 11, 100, ['chicken leg', 'dark meat']),
-  food('Ground beef (15%)', 250, 26, 0, 15, 100, ['mince', 'ground meat', 'hamburger patty', 'beef']),
-  food('Steak (sirloin)', 271, 25, 0, 18, 100, ['steak', 'sirloin', 'beef steak']),
-  food('Pork chop', 242, 27, 0, 14, 100, ['pork']),
+  food('Ground beef (15%)', 250, 26, 0, 15, 100, ['mince', 'minced beef', 'ground meat', 'hamburger patty', 'beef', 'meat loaf', 'meatloaf']),
+  food('Steak (sirloin)', 271, 25, 0, 18, 100, ['steak', 'sirloin', 'beef steak', 'sirloin steak', 'ribeye', 'rib eye', 'flank steak', 'grilled steak']),
+  food('Pork chop', 242, 27, 0, 14, 100, ['pork', 'pork steak']),
   food('Bacon', 541, 37, 1.4, 42, 100, ['streaky bacon']),
   food('Ham', 145, 21, 1.5, 5.5, 100, ['sliced ham']),
   food('Sausage', 301, 12, 2, 27, 100, ['bratwurst', 'hot dog sausage']),
@@ -29,7 +29,7 @@ export const FOODS = [
   food('White fish', 82, 18, 0, 0.7, 100, ['cod', 'tilapia', 'haddock', 'fish']),
   food('Tuna (canned)', 132, 28, 0, 1, 100, ['tuna', 'canned tuna']),
   food('Shrimp', 99, 24, 0, 0.3, 100, ['prawn', 'prawns', 'shrimp']),
-  food('Egg', 78, 6.3, 0.6, 5.3, 50, ['boiled egg', 'fried egg', 'scrambled egg', 'eggs'], '1 large egg'),
+  food('Egg', 78, 6.3, 0.6, 5.3, 50, ['boiled egg', 'fried egg', 'scrambled egg', 'eggs', 'omelette', 'omelet'], '1 large egg'),
   food('Egg white', 17, 3.6, 0.2, 0.1, 33, ['egg whites'], '1 white'),
   food('Tofu', 76, 8, 1.9, 4.8, 100, ['bean curd', 'firm tofu']),
   food('Whey protein', 120, 24, 3, 1.5, 30, ['protein powder', 'whey', 'protein shake'], '1 scoop'),
@@ -44,9 +44,9 @@ export const FOODS = [
   food('Mayonnaise', 94, 0.1, 0.1, 10, 14, ['mayo'], '1 tbsp'),
   food('Peanut butter', 188, 8, 6, 16, 32, ['peanut', 'nut butter'], '2 tbsp'),
   food('Almonds', 164, 6, 6, 14, 28, ['almond', 'nuts'], '1 handful'),
-  food('Rice (cooked)', 205, 4.3, 45, 0.4, 158, ['white rice', 'steamed rice', 'rice', 'risotto', 'pilaf'], '1 cup'),
-  food('Brown rice (cooked)', 216, 5, 45, 1.8, 195, ['brown rice'], '1 cup'),
-  food('Pasta (cooked)', 221, 8, 43, 1.3, 140, ['spaghetti', 'penne', 'noodles', 'pasta', 'carbonara', 'lasagne', 'macaroni'], '1 cup'),
+  food('Rice (cooked)', 205, 4.3, 45, 0.4, 158, ['white rice', 'steamed rice', 'boiled rice', 'basmati rice', 'jasmine rice', 'long grain rice', 'rice', 'risotto', 'pilaf'], '1 cup'),
+  food('Brown rice (cooked)', 216, 5, 45, 1.8, 195, ['brown rice', 'wholegrain rice'], '1 cup'),
+  food('Pasta (cooked)', 221, 8, 43, 1.3, 140, ['spaghetti', 'penne', 'noodles', 'pasta', 'carbonara', 'lasagne', 'macaroni', 'fusilli', 'rigatoni', 'linguine', 'fettuccine', 'macaroni cheese'], '1 cup'),
   food('Bread (white)', 79, 2.7, 15, 1, 30, ['toast', 'white bread', 'slice of bread'], '1 slice'),
   food('Bread (whole wheat)', 81, 4, 14, 1.1, 30, ['wholemeal bread', 'brown bread'], '1 slice'),
   food('Bagel', 245, 10, 48, 1.5, 98, ['bagel'], '1 bagel'),
@@ -265,15 +265,42 @@ export function searchExercises(q, limit = 40) {
 /* ---------------- classifier labels → food ---------------- */
 
 /*
- * ImageNet knows "bagel" and "dough" but not "cinnamon roll", so a confident
- * single answer is often a lie. Three things keep it honest:
- *   1. strict label matching (no "dough" → "donut" substring nonsense)
- *   2. visual families: a generic baked-goods label expands to the whole
- *      bakery shelf, so the right item is on screen instead of a wrong one
- *   3. ordered weights inside a family: when the label is generic, the things
- *      people actually photograph come first (a roll before a cookie), and a
- *      coarse colour/texture fingerprint nudges the order for that photo
+ * ImageNet knows "bagel" and "dough" but not "steak", "rice" or "cinnamon
+ * roll", so a confident single answer from it is often a lie. Facts that drive
+ * the design:
+ *   - a plate of steak and rice trips "dough" (white mounds) and "carbonara"
+ *     (brown + pale), never "steak" or "rice" — those are not classes
+ *   - "dough" is a generic label, so expanding it straight to Cinnamon roll is
+ *     a fabrication; it should only reach generic bread
+ *   - two thirds of meal photos are savoury, and sweet families were winning
+ *     ties against meat because their shelf weights were highest
+ *
+ * So: strict whole-word matching, direct hits always outrank family guesses,
+ * a specific trigger is required for a specific pastry, sweet families are
+ * damped unless the photo actually says something sweet, and a plated frame
+ * with savoury evidence is reported as a mixed plate instead of one wrong dish.
  */
+const SWEET_FAMILIES = new Set(['bakery', 'dessert']);
+const SAVOURY_FAMILIES = ['meat', 'rice', 'salad', 'fastfood', 'breakfast'];
+
+/* Terms specific enough to justify naming that exact item. */
+const SPECIFIC = new Set([
+  'cinnamon', 'cinnamon roll', 'cinnamon bun', 'cinnamon swirl', 'sticky bun',
+  'iced bun', 'sweet roll', 'icing', 'frosting', 'cheesecake', 'cupcake',
+  'muffin', 'cookie', 'biscuit', 'doughnut', 'donut', 'waffle', 'waffles',
+  'pancake', 'pancakes', 'brownie', 'pie', 'apple pie', 'pumpkin pie', 'tart',
+  'cake', 'sponge cake', 'chocolate cake', 'ice cream', 'icecream', 'gelato',
+  'chocolate', 'scone', 'french toast', 'banana bread', 'coffee cake',
+  'pretzel', 'churro', 'croissant', 'danish', 'pain au chocolat', 'bagel',
+]);
+
+/* Shape cues: MobileNet says "coil, spiral, volute, whorl, helix" about a
+   cinnamon roll. Only trusted when a bakery shelf also fired, so a nautilus
+   shell does not become breakfast. */
+const SHAPE_HINTS = [
+  { food: 'Cinnamon roll', terms: ['coil', 'spiral', 'volute', 'whorl', 'helix'], fams: ['bakery', 'dessert'], mul: 1.7 },
+];
+
 export const VISUAL_FAMILIES = [
   {
     id: 'bakery',
@@ -283,22 +310,30 @@ export const VISUAL_FAMILIES = [
       'doughnut', 'donut', 'toast', 'loaf', 'pita', 'focaccia', 'baguette', 'roll', 'scone',
       'cinnamon', 'icing', 'frosting', 'sweet roll', 'viennoiserie', 'brioche'],
     foods: [
-      ['Cinnamon roll', 1],
-      ['Croissant', 0.97],
+      // [food, weight, needs?] — `needs` gating: without one of those exact
+      // terms firing, the item is heavily damped. Generic "dough"/"bakery"
+      // must not produce "Cinnamon roll".
       ['Sourdough bread', 0.94],
       ['Bread roll', 0.93],
-      ['Bagel', 0.9],
-      ['Danish pastry', 0.89],
-      ['Muffin', 0.86],
-      ['Donut', 0.85],
-      ['Cookie', 0.82],
-      ['Cake (slice)', 0.8],
-      ['Waffle', 0.78],
-      ['Pancakes', 0.76],
-      ['Scone', 0.75],
-      ['Banana bread', 0.73],
-      ['Coffee cake', 0.7],
-      ['Brownie', 0.68],
+      ['Bread (white)', 0.9],
+      ['Bread (whole wheat)', 0.87],
+      ['Bagel', 0.88, ['bagel', 'beigel']],
+      ['Croissant', 0.86, ['croissant']],
+      ['Danish pastry', 0.8, ['danish', 'pain au chocolat', 'viennoiserie']],
+      ['Cinnamon roll', 1, ['cinnamon', 'cinnamon roll', 'cinnamon bun', 'cinnamon swirl',
+        'sticky bun', 'iced bun', 'sweet roll', 'cinnamon pastry']],
+      ['Pretzel', 0.82, ['pretzel']],
+      ['Muffin', 0.84, ['muffin']],
+      ['Donut', 0.84, ['doughnut', 'donut']],
+      ['Cookie', 0.84, ['cookie', 'biscuit']],
+      ['Cake (slice)', 0.82, ['cake', 'sponge cake']],
+      ['Waffle', 0.8, ['waffle', 'waffles']],
+      ['Pancakes', 0.78, ['pancake', 'pancakes']],
+      ['Scone', 0.78, ['scone', 'scones']],
+      ['Banana bread', 0.76, ['banana bread', 'banana loaf', 'loaf cake']],
+      ['Coffee cake', 0.74, ['coffee cake', 'crumb cake', 'streusel cake']],
+      ['Churro', 0.74, ['churro', 'churros']],
+      ['Brownie', 0.72, ['brownie']],
     ],
   },
   {
@@ -307,15 +342,15 @@ export const VISUAL_FAMILIES = [
     triggers: ['ice cream', 'icecream', 'gelato', 'chocolate sauce', 'trifle', 'custard',
       'cake', 'cookie', 'brownie', 'cheesecake', 'candy', 'confectionery', 'pastry'],
     foods: [
-      ['Cheesecake', 1],
-      ['Cupcake', 0.96],
-      ['Pie (fruit)', 0.94],
-      ['Cake (slice)', 0.92],
-      ['Brownie', 0.9],
-      ['Cookie', 0.88],
-      ['Ice cream', 0.86],
-      ['Chocolate', 0.82],
-      ['Donut', 0.8],
+      ['Cheesecake', 1, ['cheesecake']],
+      ['Cupcake', 0.96, ['cupcake']],
+      ['Pie (fruit)', 0.94, ['pie', 'apple pie', 'pumpkin pie', 'fruit pie', 'tart']],
+      ['Cake (slice)', 0.9, ['cake', 'sponge cake']],
+      ['Brownie', 0.9, ['brownie']],
+      ['Cookie', 0.88, ['cookie', 'biscuit']],
+      ['Ice cream', 0.86, ['ice cream', 'icecream', 'gelato']],
+      ['Chocolate', 0.82, ['chocolate']],
+      ['Donut', 0.8, ['doughnut', 'donut']],
     ],
   },
   {
@@ -323,16 +358,30 @@ export const VISUAL_FAMILIES = [
     name: 'fast food',
     triggers: ['cheeseburger', 'hamburger', 'hot dog', 'hotdog', 'french fries', 'fries',
       'pizza', 'burrito', 'taco', 'sandwich', 'hoagie', 'grinder'],
-    foods: ['Cheeseburger', 'Pizza (cheese)', 'Hot dog', 'Sandwich (deli)', 'Burrito',
-      'Taco', 'French fries'],
+    foods: [
+      ['Cheeseburger', 1],
+      ['Pizza (cheese)', 0.95],
+      ['Hot dog', 0.9],
+      ['Sandwich (deli)', 0.88],
+      ['Burrito', 0.86],
+      ['Taco', 0.84],
+      ['French fries', 0.8],
+    ],
   },
   {
     id: 'rice',
     name: 'rice or noodles',
     triggers: ['rice', 'risotto', 'pilaf', 'biryani', 'curry', 'carbonara', 'spaghetti',
       'lasagne', 'noodles', 'ramen', 'paella', 'burrito'],
-    foods: ['Rice (cooked)', 'Brown rice (cooked)', 'Pasta (cooked)', 'Fried rice',
-      'Biryani', 'Ramen', 'Burrito'],
+    foods: [
+      ['Rice (cooked)', 1, ['rice', 'risotto', 'pilaf', 'paella', 'curry']],
+      ['Brown rice (cooked)', 0.95, ['rice', 'brown rice']],
+      ['Pasta (cooked)', 1, ['carbonara', 'spaghetti', 'lasagne', 'noodles', 'pasta']],
+      ['Fried rice', 0.92, ['rice', 'fried rice']],
+      ['Biryani', 0.9, ['biryani']],
+      ['Ramen', 0.9, ['ramen', 'noodles']],
+      ['Burrito', 0.82, ['burrito']],
+    ],
   },
   {
     id: 'breakfast',
@@ -352,10 +401,17 @@ export const VISUAL_FAMILIES = [
   {
     id: 'meat',
     name: 'meat or fish',
-    triggers: ['steak', 'meat', 'beef', 'pork', 'chicken', 'fish', 'salmon', 'shrimp',
+    triggers: ['steak', 'meat', 'beef', 'pork', 'chicken', 'turkey', 'fish', 'salmon', 'shrimp',
       'lobster', 'crab', 'bacon', 'ham', 'sausage'],
-    foods: ['Chicken breast', 'Steak (sirloin)', 'Ground beef (15%)', 'Pork chop',
-      'Salmon', 'Shrimp', 'Turkey breast'],
+    foods: [
+      ['Steak (sirloin)', 1, ['steak', 'beef']],
+      ['Chicken breast', 0.95, ['chicken', 'turkey']],
+      ['Ground beef (15%)', 0.92, ['beef', 'meat', 'steak']],
+      ['Pork chop', 0.9, ['pork']],
+      ['Salmon', 0.88, ['salmon', 'fish']],
+      ['Shrimp', 0.84, ['shrimp', 'crab', 'lobster']],
+      ['Turkey breast', 0.8, ['turkey', 'chicken']],
+    ],
   },
 ];
 
@@ -434,14 +490,23 @@ export const matchLabels = (predictions, learned) => matchVisual(predictions, le
  * @returns {{candidates:Array, family:string|null, saw:string[], sure:boolean}}
  */
 export function matchVisual(predictions, learned = {}, features = null) {
-  const out = new Map();
-  const add = (food, score, why) => {
-    const cur = out.get(food.id);
-    if (!cur || cur.score < score) out.set(food.id, { food, score, why });
+  // Direct hits and shelf guesses are accumulated separately: a family guess
+  // must never outrank a real label for the same photo.
+  const cands = new Map();
+  const put = (food, score, kind, famId = null) => {
+    let c = cands.get(food.id);
+    if (!c) {
+      c = { food, direct: 0, fam: 0, famId: null };
+      cands.set(food.id, c);
+    }
+    if (kind === 'direct') c.direct = Math.max(c.direct, score);
+    else if (score > c.fam) { c.fam = score; c.famId = famId; }
   };
 
   const familyScore = new Map();
+  const fired = new Map(); // family id -> Set of trigger terms that fired
   const spoken = [];
+  let tableware = 0;
 
   for (const p of predictions) {
     const score = Math.max(0, Number(p.score) || 0);
@@ -451,8 +516,9 @@ export function matchVisual(predictions, learned = {}, features = null) {
     const full = norm(raw);
     if (!label) continue;
     spoken.push(raw.split(',')[0].trim());
-    if (NON_FOOD.has(label)) continue;
+    if (NON_FOOD.has(label)) { tableware = Math.max(tableware, score); continue; }
 
+    // 1. Labels that name a food in the table.
     for (const f of FOODS) {
       const names = [norm(f.name), ...f.aliases.map(norm)];
       const hit = names.find((n) => aliasMatch(label, n));
@@ -461,17 +527,24 @@ export function matchVisual(predictions, learned = {}, features = null) {
       // ("chocolate chip cookie" is a cookie). A label that merely contains it
       // is weaker, so "chocolate" cannot outrank "cookie" for that photo.
       const strong = label === hit || label.endsWith(' ' + hit);
-      add(f, score * (strong ? 1 : 0.84), 'direct');
+      put(f, score * (strong ? 1 : 0.84), 'direct');
     }
 
+    // 2. Generic labels expand to their shelf — but only the generic members
+    //    unless the label was specific enough to name an item.
     for (const fam of VISUAL_FAMILIES) {
-      if (!fam.triggers.some((t) => hasTerm(full, t) || hasTerm(label, t))) continue;
+      const hits = fam.triggers.filter((t) => hasTerm(full, t) || hasTerm(label, t));
+      if (!hits.length) continue;
       familyScore.set(fam.id, (familyScore.get(fam.id) || 0) + score);
+      if (!fired.has(fam.id)) fired.set(fam.id, new Set());
+      for (const h of hits) fired.get(fam.id).add(h);
 
       const items = fam.foods.map((entry) => {
-        const [name, weight] = Array.isArray(entry) ? entry : [entry, 1];
+        const [name, weight, needs] = Array.isArray(entry) ? entry : [entry, 1, null];
         const f = FOODS.find((x) => x.name === name);
-        return f ? { f, weight } : null;
+        if (!f) return null;
+        const justified = !needs || needs.some((n) => hits.includes(n));
+        return { f, weight: weight * (justified ? 1 : 0.4) };
       }).filter(Boolean);
 
       // Centre the fingerprint scores inside the family: a badly exposed photo
@@ -481,44 +554,95 @@ export function matchVisual(predictions, learned = {}, features = null) {
 
       items.forEach((it, i) => {
         const bump = features ? nudge(1 + (aff[i] - mean) * 1.4) : 1;
-        add(it.f, score * 0.72 * it.weight * bump, fam.id);
+        put(it.f, score * 0.78 * it.weight * bump, 'family', fam.id);
       });
     }
   }
 
+  // Shape cues only count when the matching shelf already fired.
+  for (const hint of SHAPE_HINTS) {
+    if (!hint.fams.some((id) => fired.has(id))) continue;
+    const f = FOODS.find((x) => x.name === hint.food);
+    if (!f) continue;
+    let evidence = 0;
+    for (const p of predictions) {
+      const label = norm(String(p.label || '').split(',')[0]);
+      if (hint.terms.some((t) => hasTerm(label, t))) evidence = Math.max(evidence, Number(p.score) || 0);
+    }
+    if (evidence > 0) put(f, evidence * hint.mul, 'direct');
+  }
+
+  // Context that MobileNet cannot give us directly, inferred from the labels:
+  //   tableware + savoury shelves  → a plated meal, not a pastry
+  //   no specific sweet word       → the photo has not earned a dessert
+  // A confident single-food label ("pizza" 1.00) settles it, though: a pizza in
+  // a pan still has zucchini and mushroom beside it and must not be "mixed".
+  const bestDirect = Math.max(0, ...[...cands.values()].map((c) => c.direct));
+  const savoury = SAVOURY_FAMILIES.filter((id) => fired.has(id));
+  const sweetSpecific = [...fired.keys()].some((id) => SWEET_FAMILIES.has(id)
+    && [...fired.get(id)].some((t) => SPECIFIC.has(t)));
+  const mixed = bestDirect < 0.45
+    && (savoury.length >= 2 || (tableware >= 0.15 && savoury.length >= 1));
+  const plated = tableware >= 0.12;
+
+  const scored = [];
+  for (const c of cands.values()) {
+    let fam = c.fam;
+    if (c.famId && SWEET_FAMILIES.has(c.famId)) {
+      if (!sweetSpecific) fam *= 0.55;      // generic "dough" is not a dessert
+      if (mixed) fam *= 0.35;               // a full plate is not a pastry
+      else if (plated) fam *= 0.7;
+    }
+    const score = Math.max(c.direct, fam);
+    if (score <= 0) continue;
+    scored.push({ food: c.food, score, why: c.direct >= fam ? 'direct' : c.famId, famId: c.famId });
+  }
+
   // A label the user already corrected wins next time. Keyed on the exact
   // top label, so "dough" can mean cinnamon roll without touching "bagel".
+  // Skipped on a mixed plate: remembering "dough → cinnamon roll" must not
+  // resurrect the exact mistake this detection exists to prevent.
   const topLabel = predictions.length ? norm(String(predictions[0].label || '').split(',')[0]) : '';
   const remembered = topLabel ? learned[topLabel] : null;
-  if (remembered && remembered.id) {
+  if (remembered && remembered.id && !mixed) {
     const f = FOODS.find((x) => x.id === remembered.id);
-    const best = Math.max(0, ...[...out.values()].map((c) => c.score));
-    if (f) add(f, Math.max(best * 1.2, 0.35), 'learned');
+    const best = Math.max(0, ...scored.map((c) => c.score));
+    if (f) {
+      const existing = scored.find((c) => c.food.id === f.id);
+      if (existing) existing.score = Math.max(existing.score, best * 1.2, 0.35);
+      else scored.push({ food: f, score: Math.max(best * 1.2, 0.35), why: 'learned', famId: null });
+    }
   }
 
-  const sorted = [...out.values()].sort((a, b) => b.score - a.score);
+  scored.sort((a, b) => b.score - a.score);
   const foodWords = spoken.filter((s) => !NON_FOOD.has(norm(s)));
-  if (!sorted.length) {
-    return { candidates: [], family: null, saw: (foodWords.length ? foodWords : spoken).slice(0, 3), sure: false };
+  const saw = (foodWords.length ? foodWords : spoken).slice(0, 3);
+  if (!scored.length) {
+    return { candidates: [], family: null, saw, sure: false, mixed: false, plated };
   }
 
-  const family = [...familyScore.entries()].sort((a, b) => b[1] - a[1])[0];
-  const fam = family ? VISUAL_FAMILIES.find((f) => f.id === family[0]) : null;
-  const direct = sorted.find((c) => c.why === 'direct');
+  const top = scored[0];
+  // Name the family of the *winning* candidate, not the loudest label: a photo
+  // whose top answer is bread should not be labelled "meat or fish".
+  const fam = top.famId ? VISUAL_FAMILIES.find((f) => f.id === top.famId) : null;
 
   return {
-    candidates: sorted.slice(0, 6),
+    candidates: scored.slice(0, 6),
     family: fam ? fam.name : null,
-    saw: (foodWords.length ? foodWords : spoken).slice(0, 3),
-    sure: !!direct && direct.score >= 0.55,
+    saw,
+    sure: top.why === 'direct' && top.score >= 0.5 && !mixed,
+    mixed,
+    plated,
   };
 }
 
-/** Whole-word label/alias match — "dough" must not match "doughnut". */
+/** Whole-word label/alias match — "dough" must not match "doughnut".
+ *  One-directional on purpose: a longer, more specific label may contain the
+ *  alias ("chocolate chip cookie" is a cookie), but a bare generic word must
+ *  not name a multi-word dish ("cake" is not "coffee cake"). */
 function aliasMatch(label, alias) {
   if (!label || !alias) return false;
   if (label === alias) return true;
-  if (alias.split(' ').includes(label)) return true;
-  if (label.split(' ').includes(alias)) return true;
+  if (alias.indexOf(' ') === -1 && label.split(' ').includes(alias)) return true;
   return false;
 }

@@ -4,6 +4,8 @@ import { render as renderWorkout } from './workout.js';
 import { render as renderNutrition } from './nutrition.js';
 import { render as renderBody } from './body.js';
 import { render as renderSettings } from './settings.js';
+import { render as renderFriends } from './friends.js';
+import { initAuth, onAuth } from './auth.js';
 
 const viewEl = document.getElementById('view');
 const routes = {
@@ -11,6 +13,7 @@ const routes = {
   workout: renderWorkout,
   nutrition: renderNutrition,
   body: renderBody,
+  friends: renderFriends,
   settings: renderSettings,
 };
 
@@ -60,6 +63,7 @@ function render() {
 }
 
 subscribe(() => schedule());
+onAuth(() => schedule());
 window.addEventListener('hashchange', schedule);
 
 (async function start() {
@@ -71,6 +75,9 @@ window.addEventListener('hashchange', schedule);
   }
   if (!location.hash) location.hash = '#/today';
   render();
+
+  // Restores a saved session (auto sign-in). No-op when accounts are unconfigured.
+  initAuth();
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     const register = () => navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW registration failed', e));

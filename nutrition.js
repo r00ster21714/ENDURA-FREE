@@ -214,7 +214,11 @@ export function openScanner(ctx) {
           const match = matchVisual(preds, state.learned, features);
           busy(false);
           // A 0.02-score guess dressed up as an answer is worse than asking.
-          const weak = !match.candidates.length || match.candidates[0].score < 0.05;
+          // Shelf guesses need more evidence than a label that names a food:
+          // "spatula 0.83" expands to Broccoli 0.14, which is not a meal.
+          const top = match.candidates[0];
+          const floor = top && top.why === 'direct' ? 0.18 : 0.15;
+          const weak = !top || top.score < floor;
           if (weak) {
             showNoMatch(sheetRoot, thumb.dataUrl, match, ctx, !match.candidates.length ? 'unknown' : 'weak');
           } else {
@@ -262,6 +266,7 @@ function showNoMatch(root, photo, match, ctx, reason = 'unknown') {
         ? `The model hesitated between ${esc(top || 'a few guesses')}, none strongly enough to call it. Pick the food from the list — the nutrition fills itself in, and the photo isn't saved.`
         : `The model guessed ${esc(top || 'nothing')}, which isn't in the food list. Pick the food from the list — the nutrition fills itself in, and the photo isn't saved.`}</div>
       <button class="btn btn--sm btn--primary" style="margin-top:12px" data-search>Pick the food</button>
+      <button class="btn btn--sm btn--ghost" style="margin-top:8px" data-plate>It's a plate with several things</button>
     </div>`;
   // Only pre-fill the search when the hint actually matches a food; otherwise
   // the picker opens on the full browsable list, which is the point.
@@ -270,6 +275,10 @@ function showNoMatch(root, photo, match, ctx, reason = 'unknown') {
   box.querySelector('[data-search]').addEventListener('click', () => {
     closeSheet();
     setTimeout(() => openFoodPicker(ctx, { photo, scanLabel: match.saw[0] || null, prefill }), 40);
+  });
+  box.querySelector('[data-plate]').addEventListener('click', () => {
+    closeSheet();
+    setTimeout(() => openPlateBuilder(ctx, { photo, scanLabel: match.saw[0] || null }), 40);
   });
 }
 
@@ -339,12 +348,18 @@ function openFoodPicker(ctx, { photo = null, scanLabel = null, candidates = [], 
     <div class="sheet__body">
       <div class="hint" style="margin-bottom:10px">Tap the food and the nutrition fills itself in — calories, protein, carbs and fat. You only confirm the portion.</div>
       <input class="input" id="pick-q" placeholder="Search ${FOODS.length} foods (optional)" autocomplete="off">
+      <button class="btn btn--sm btn--ghost btn--block" data-plate style="margin-top:8px">It's a plate with several things</button>
       <div id="pick-list" style="margin-top:4px"></div>
     </div>
   `, {
     onMount(root) {
       const list = root.querySelector('#pick-list');
       const q = root.querySelector('#pick-q');
+
+      root.querySelector('[data-plate]').addEventListener('click', () => {
+        closeSheet();
+        setTimeout(() => openPlateBuilder(ctx, { photo, scanLabel }), 40);
+      });
 
       const draw = () => {
         const query = q.value.trim();
@@ -375,10 +390,158 @@ function openFoodPicker(ctx, { photo = null, scanLabel = null, candidates = [], 
   });
 }
 
-/* One answer, not a quiz: name the dish, log it, and make the correction
-   path obvious when the guess is wrong. */
+/* ---------------- plate builder ---------------- */
+
+/*
+ * Steak and rice is two foods; one ImageNet label can never be right for it.
+ * This is the honest answer to a mixed plate: tap the parts, get real macros.
+ * Nothing to type, no photo stored, and each part is just a normal log entry.
+ */
+const PLATE_GROUPS = [
+  { name: 'Protein', foods: ['Steak (sirloin)', 'Chicken breast', 'Ground beef (15%)', 'Pork chop', 'Salmon', 'Egg', 'Tofu'] },
+  { name: 'Carbs', foods: ['Rice (cooked)', 'Pasta (cooked)', 'Potato (boiled)', 'Sweet potato', 'Bread (white)', 'French fries'] },
+  { name: 'Veg', foods: ['Broccoli', 'Salad (mixed)', 'Carrot', 'Bell pepper', 'Spinach', 'Cucumber'] },
+  { name: 'Extras', foods: ['Butter', 'Olive oil', 'Cheddar cheese', 'Mayonnaise', 'Ketchup'] },
+];
+
+export function openPlateBuilder(ctx, { photo = null, scanLabel = null, suggest = [] } = {}) {
+  const plateNames = new Set(PLATE_GROUPS.flatMap((g) => g.foods));
+  const picked = new Map(); // foodId -> multiplier of one serving
+  for (const name of suggest) {
+    const f = FOODS.find((x) => x.name === name);
+    if (f && plateNames.has(f.name)) picked.set(f.id, 1);
+  }
+
+  const totals = () => {
+    let kcal = 0, protein = 0, carbs = 0, fat = 0;
+    for (const [id, mult] of picked) {
+      const f = FOODS.find((x) => x.id === id);
+      if (!f) continue;
+      const g = f.serveG * mult;
+      kcal += (f.per100.kcal * g) / 100;
+      protein += (f.per100.protein * g) / 100;
+      carbs += (f.per100.carbs * g) / 100;
+      fat += (f.per100.fat * g) / 100;
+    }
+    return { kcal, protein, carbs, fat };
+  };
+
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Build the plate</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      ${photo ? `<img class="scanimg" src="${photo}" alt="Meal photo" style="max-height:140px;margin-bottom:8px">` : ''}
+      <div class="hint">Tap everything that was on the plate. Each one logs as its own food, so the totals are real instead of one wrong guess.</div>
+      <div id="plate-picks"></div>
+      <div id="plate-selected" style="margin-top:6px"></div>
+      <div class="spread card card--tight" id="plate-total" style="margin-top:12px"></div>
+    </div>
+    <div class="sheet__foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn--primary" data-add disabled>Add to log</button>
+    </div>
+  `, {
+    onMount(root) {
+      const picksEl = root.querySelector('#plate-picks');
+      const selEl = root.querySelector('#plate-selected');
+      const totalEl = root.querySelector('#plate-total');
+      const addBtn = root.querySelector('[data-add]');
+
+      const chip = (f) => {
+        const on = picked.has(f.id);
+        return `<button class="pill" data-pick="${f.id}" aria-pressed="${on}" style="${on ? 'border-color:var(--accent);color:var(--accent)' : ''}">${on ? '✓ ' : ''}${esc(f.name)}</button>`;
+      };
+
+      const paint = () => {
+        picksEl.innerHTML = PLATE_GROUPS.map((g) => {
+          const foods = g.foods.map((n) => FOODS.find((x) => x.name === n)).filter(Boolean);
+          return `<div class="label" style="margin:14px 0 6px">${esc(g.name)}</div>
+            <div class="row" style="gap:6px;flex-wrap:wrap">${foods.map(chip).join('')}</div>`;
+        }).join('');
+
+        const rows = [...picked.entries()].map(([id, mult]) => {
+          const f = FOODS.find((x) => x.id === id);
+          if (!f) return '';
+          const g = Math.round(f.serveG * mult);
+          const kcal = Math.round((f.per100.kcal * g) / 100);
+          return `<div class="spread" style="padding:7px 0;border-bottom:1px solid var(--line)">
+            <div style="min-width:0">
+              <div style="font-weight:650;font-size:13.5px">${esc(f.name)}</div>
+              <div class="tiny muted">${g} g · ${kcal} kcal</div>
+            </div>
+            <div class="row" style="gap:5px">
+              ${[0.5, 1, 1.5, 2].map((m) => `<button class="pill" data-mult="${id}:${m}" aria-pressed="${m === mult}" style="${m === mult ? 'border-color:var(--accent);color:var(--accent)' : ''}">${m}×</button>`).join('')}
+              <button class="btn btn--bare" data-drop="${id}" aria-label="Remove" style="color:var(--muted)">${icon('x')}</button>
+            </div>
+          </div>`;
+        });
+        selEl.innerHTML = rows.length
+          ? `<div class="label" style="margin:14px 0 2px">On the plate</div>${rows.join('')}`
+          : '';
+
+        const t = totals();
+        totalEl.innerHTML = picked.size
+          ? `<span class="tiny muted">${picked.size} item${picked.size > 1 ? 's' : ''}</span>
+             <span class="mono" style="font-size:13px">${Math.round(t.kcal)} kcal · ${Math.round(t.protein)}P ${Math.round(t.carbs)}C ${Math.round(t.fat)}F</span>`
+          : '<span class="tiny muted">Nothing picked yet</span>';
+        addBtn.disabled = picked.size === 0;
+        addBtn.textContent = picked.size ? `Add ${picked.size} item${picked.size > 1 ? 's' : ''}` : 'Add to log';
+
+        picksEl.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
+          const id = b.dataset.pick;
+          if (picked.has(id)) picked.delete(id); else picked.set(id, 1);
+          paint();
+        }));
+        selEl.querySelectorAll('[data-mult]').forEach((b) => b.addEventListener('click', () => {
+          const [id, m] = b.dataset.mult.split(':');
+          picked.set(id, Number(m));
+          paint();
+        }));
+        selEl.querySelectorAll('[data-drop]').forEach((b) => b.addEventListener('click', () => {
+          picked.delete(b.dataset.drop);
+          paint();
+        }));
+      };
+
+      addBtn.addEventListener('click', async () => {
+        addBtn.disabled = true;
+        addBtn.textContent = 'Adding…';
+        let last = '';
+        for (const [id, mult] of picked) {
+          const f = FOODS.find((x) => x.id === id);
+          if (!f) continue;
+          const g = Math.max(1, Math.round(f.serveG * mult));
+          await addMeal({
+            id: uid(), date: viewDate, ts: Date.now(),
+            name: f.name, grams: g,
+            kcal: Math.round((f.per100.kcal * g) / 100),
+            protein: round1((f.per100.protein * g) / 100),
+            carbs: round1((f.per100.carbs * g) / 100),
+            fat: round1((f.per100.fat * g) / 100),
+            source: photo ? 'scan' : 'manual',
+          });
+          last = f.name;
+        }
+        if (scanLabel && picked.size === 1) {
+          const only = [...picked.keys()][0];
+          await learnLabel(scanLabel, only);
+        }
+        closeSheet();
+        toast(picked.size > 1 ? `Logged ${picked.size} items` : last + ' logged', 'ok');
+        ctx.rerender();
+      });
+
+      paint();
+    },
+  });
+}
+
+/* One answer, not a quiz, but never a confident lie: a plated frame with
+   several savoury signals is reported as a mixed plate and split into parts. */
 function showCandidates(root, match, photo, ctx) {
-  const { candidates, saw, sure, family } = match;
+  const { candidates, saw, sure, family, mixed, plated } = match;
   const box = root.querySelector('#scan-result');
   const lead = candidates[0];
   const alts = candidates.slice(1, 4);
@@ -389,27 +552,10 @@ function showCandidates(root, match, photo, ctx) {
     openPortionSheet(food, ctx, { photo, source: 'scan', scanLabel });
   };
 
-  const drawAnswer = () => {
-    box.innerHTML = `
-      <div style="text-align:center;padding:8px 0 0">
-        <div class="tiny muted">${sure ? 'This is' : family ? `Looks like ${esc(family)} · best guess` : 'Best guess'}</div>
-        <div class="scan-answer__name">${esc(lead.food.name)}</div>
-        <div class="scan-answer__sub">${Math.round(lead.food.kcal)} kcal per ${lead.food.serveG} g · ${Math.round(lead.food.protein)} P / ${Math.round(lead.food.carbs)} C / ${Math.round(lead.food.fat)} F</div>
-      </div>
-      <button class="btn btn--primary btn--block" data-log style="margin-top:16px">Add ${esc(lead.food.name)}</button>
-      ${alts.length ? `
-        <div class="label" style="margin:14px 0 6px">Not it? One tap</div>
-        <div class="row" style="gap:6px;flex-wrap:wrap">
-          ${alts.map((c, i) => `<button class="pill" data-quick="${i}">${esc(c.food.name)}</button>`).join('')}
-        </div>` : ''}
-      <button class="btn btn--ghost btn--sm btn--block" data-change style="margin-top:10px">Not right? Choose the food</button>
-      <div class="tiny muted" style="margin-top:10px;text-align:center">The photo isn't saved.</div>`;
-    box.querySelector('[data-log]').addEventListener('click', () => openFood(lead.food));
-    box.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => {
-      openFood(alts[Number(b.dataset.quick)].food);
-    }));
-    const change = box.querySelector('[data-change]');
-    if (change) change.addEventListener('click', drawPicker);
+  const suggest = candidates.filter((c) => c.score >= 0.3).slice(0, 3).map((c) => c.food.name);
+  const openPlate = () => {
+    closeSheet();
+    setTimeout(() => openPlateBuilder(ctx, { photo, scanLabel, suggest }), 40);
   };
 
   const drawPicker = () => {
@@ -417,7 +563,61 @@ function showCandidates(root, match, photo, ctx) {
     setTimeout(() => openFoodPicker(ctx, { photo, scanLabel, candidates, heading: 'What was it?' }), 40);
   };
 
-  drawAnswer();
+  const foot = `
+    <button class="btn btn--ghost btn--sm btn--block" data-change style="margin-top:10px">Not right? Choose the food</button>
+    <div class="tiny muted" style="margin-top:10px;text-align:center">The photo isn't saved.</div>`;
+
+  // Mixed plate: do not name a dish at all. Naming one is how steak and rice
+  // became a cinnamon roll.
+  if (mixed) {
+    const guess = lead && lead.score >= 0.3 ? lead : null;
+    box.innerHTML = `
+      <div style="text-align:center;padding:8px 0 0">
+        <div class="tiny muted">This looks like a plated meal</div>
+        <div class="scan-answer__name">Several things</div>
+        <div class="tiny muted" style="margin-top:2px;line-height:1.45">One photo can't separate the parts, so the scanner won't pretend it can. Tap what was on the plate and the macros come out right.</div>
+      </div>
+      <button class="btn btn--primary btn--block" data-plate style="margin-top:16px">Build the plate</button>
+      ${guess ? `
+        <div class="label" style="margin:14px 0 6px">If it was one dish</div>
+        <button class="listrow listrow--btn" data-log>
+          <div class="listrow__main">
+            <div class="listrow__t">${esc(guess.food.name)}</div>
+            <div class="listrow__s">${Math.round(guess.food.kcal)} kcal · ${Math.round(guess.food.protein)}P ${Math.round(guess.food.carbs)}C ${Math.round(guess.food.fat)}F</div>
+          </div>
+        </button>` : ''}
+      ${foot}`;
+    const plateBtn = box.querySelector('[data-plate]');
+    if (plateBtn) plateBtn.addEventListener('click', openPlate);
+    const logBtn = box.querySelector('[data-log]');
+    if (logBtn) logBtn.addEventListener('click', () => guess && openFood(guess.food));
+    const change = box.querySelector('[data-change]');
+    if (change) change.addEventListener('click', drawPicker);
+    return;
+  }
+
+  box.innerHTML = `
+    <div style="text-align:center;padding:8px 0 0">
+      <div class="tiny muted">${sure ? 'This is' : family ? `Looks like ${esc(family)} · best guess` : 'Best guess'}</div>
+      <div class="scan-answer__name">${esc(lead.food.name)}</div>
+      <div class="scan-answer__sub">${Math.round(lead.food.kcal)} kcal per ${lead.food.serveG} g · ${Math.round(lead.food.protein)} P / ${Math.round(lead.food.carbs)} C / ${Math.round(lead.food.fat)} F</div>
+    </div>
+    <button class="btn btn--primary btn--block" data-log style="margin-top:16px">Add ${esc(lead.food.name)}</button>
+    ${alts.length ? `
+      <div class="label" style="margin:14px 0 6px">Not it? One tap</div>
+      <div class="row" style="gap:6px;flex-wrap:wrap">
+        ${alts.map((c, i) => `<button class="pill" data-quick="${i}">${esc(c.food.name)}</button>`).join('')}
+      </div>` : ''}
+    <button class="btn btn--sm btn--ghost btn--block" data-plate style="margin-top:8px">It's a plate with several things</button>
+    ${foot}`;
+  box.querySelector('[data-log]').addEventListener('click', () => openFood(lead.food));
+  box.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => {
+    openFood(alts[Number(b.dataset.quick)].food);
+  }));
+  const plate = box.querySelector('[data-plate]');
+  if (plate) plate.addEventListener('click', openPlate);
+  const change = box.querySelector('[data-change]');
+  if (change) change.addEventListener('click', drawPicker);
 }
 
 /* ---------------- cloud result editor ---------------- */

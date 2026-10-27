@@ -5,6 +5,82 @@ import {
 } from './core.js';
 import { pageHead, acts } from './common.js';
 import { CLOUD_MODELS } from './vision.js';
+import {
+  auth, configureSync, signIn, signUp, signOut, saveUsername,
+  enrollTotp, confirmTotp, disableTotp, verifyMfa, refreshFactors, USERNAME_RE,
+} from './auth.js';
+
+const joinedLabel = (iso) => {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+  } catch {
+    return '—';
+  }
+};
+
+function accountCard() {
+  if (!auth.configured) {
+    return `
+    <section class="card">
+      <div class="card__head"><h2>Account</h2><span class="badge badge--muted">not set up</span></div>
+      <div class="hint">Accounts add a profile, usernames for adding friends, and 2FA. Workouts and food stay on this phone either way.</div>
+      <button class="btn btn--sm btn--primary" style="margin-top:10px" data-act="sync-setup">Set up accounts</button>
+    </section>`;
+  }
+
+  if (auth.needsMfa) {
+    return `
+    <section class="card" style="border-color:rgba(255,200,90,.35)">
+      <div class="card__head"><h2>Account</h2><span class="badge">2FA required</span></div>
+      <div class="hint">This account has two-factor on. Enter the 6-digit code from your authenticator app to finish signing in.</div>
+      <button class="btn btn--sm btn--primary" style="margin-top:10px" data-act="mfa-verify">Enter 2FA code</button>
+    </section>`;
+  }
+
+  if (!auth.session) {
+    return `
+    <section class="card">
+      <div class="card__head"><h2>Account</h2><span class="badge badge--muted">signed out</span></div>
+      <div class="hint">Sign in or create an account. Your local data is never uploaded — only your username and friends live on the server.</div>
+      ${auth.error ? `<div class="hint" style="color:var(--danger);margin-top:8px">${auth.error}</div>` : ''}
+      <div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn btn--sm btn--primary" data-act="sign-in">Sign in</button>
+        <button class="btn btn--sm" data-act="sign-up">Create account</button>
+      </div>
+    </section>`;
+  }
+
+  const p = auth.profile || {};
+  const username = p.username || '…';
+  const email = (auth.session.user && auth.session.user.email) || '';
+  const tfOn = (auth.factors || []).some((f) => f.status === 'verified');
+  const initial = (username[0] || '?').toUpperCase();
+
+  return `
+    <section class="card">
+      <div class="row" style="gap:12px;align-items:center">
+        <div style="width:44px;height:44px;border-radius:14px;background:linear-gradient(140deg,var(--accent),#2f6f4f);display:grid;place-items:center;font-weight:800;font-size:18px;color:#08120c">${esc(initial)}</div>
+        <div class="grow" style="min-width:0">
+          <div style="font-weight:700;font-size:16px;overflow:hidden;text-overflow:ellipsis">@${esc(username)}</div>
+          <div class="tiny muted" style="overflow:hidden;text-overflow:ellipsis">${esc(email)}</div>
+        </div>
+        <span class="badge badge--lime">signed in</span>
+      </div>
+      <div class="stats" style="margin-top:12px">
+        <div class="stat"><div class="stat__v" style="font-size:13px">${esc(joinedLabel(p.created_at))}</div><div class="stat__l">joined</div></div>
+        <div class="stat"><div class="stat__v" style="font-size:13px">${tfOn ? 'On' : 'Off'}</div><div class="stat__l">2FA</div></div>
+        <div class="stat"><div class="stat__v" style="font-size:13px">@${esc(username)}</div><div class="stat__l">username</div></div>
+      </div>
+      <div class="row" style="gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button class="btn btn--sm" data-act="friends">Friends</button>
+        <button class="btn btn--sm" data-act="edit-username">Change username</button>
+        <button class="btn btn--sm" data-act="2fa">${tfOn ? 'Manage 2FA' : 'Turn on 2FA'}</button>
+      </div>
+      <button class="btn btn--sm btn--ghost btn--block" style="margin-top:8px;color:var(--danger)" data-act="sign-out">Sign out of account</button>
+      <div class="hint" style="margin-top:8px">Signing out keeps every workout and meal on this phone.</div>
+    </section>`;
+}
 
 export function render(ctx) {
   const s = state.settings;
@@ -15,7 +91,9 @@ export function render(ctx) {
   root.innerHTML = `
     ${pageHead({ eyebrow: 'Settings', title: 'You' })}
 
-    <section class="card">
+    ${accountCard()}
+
+    <section class="card" style="margin-top:12px">
       <div class="label" style="margin-bottom:8px">Units</div>
       <div class="seg" id="unit-seg">
         <button data-unit="metric" aria-pressed="${units === 'metric'}">Metric (kg / cm)</button>
@@ -179,6 +257,24 @@ export function render(ctx) {
   acts(root, {
     targets: () => openTargets(ctx),
     calc: () => openCalculator(ctx),
+    'sync-setup': () => openSyncSetup(ctx),
+    'sign-in': () => openSignIn(ctx),
+    'sign-up': () => openSignUp(ctx),
+    'sign-out': async () => {
+      const ok = await confirmSheet({
+        title: 'Sign out?',
+        message: 'Your workouts, food and measurements stay on this phone. You can sign back in any time.',
+        ok: 'Sign out',
+      });
+      if (!ok) return;
+      await signOut();
+      toast('Signed out');
+      ctx.rerender();
+    },
+    friends: () => ctx.navigate('#/friends'),
+    'edit-username': () => openUsername(ctx),
+    '2fa': () => openTwoFactor(ctx),
+    'mfa-verify': () => openMfaVerify(ctx),
     'show-key': (btn) => {
       const input = root.querySelector('#cloud-key');
       input.type = input.type === 'password' ? 'text' : 'password';
@@ -436,4 +532,310 @@ function importData(ctx) {
     }
   }, { once: true });
   input.click();
+}
+
+/* ---------------- account sheets ---------------- */
+
+function openSyncSetup(ctx) {
+  const s = state.settings.sync || {};
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Set up accounts</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <div class="hint" style="line-height:1.5">1. Create a free project at supabase.com.<br>2. In the SQL editor, run <strong>supabase-setup.sql</strong> once.<br>3. Project settings → API: paste the Project URL and the anon public key below.</div>
+      <label class="field" style="margin-top:12px"><span class="field__l">Project URL</span>
+        <input class="input" id="sb-url" placeholder="https://xxxx.supabase.co" value="${esc(s.url || '')}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+      <label class="field" style="margin-top:8px"><span class="field__l">Anon public key</span>
+        <input class="input" id="sb-key" placeholder="eyJhbGciOi…" value="${esc(s.key || '')}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+      <div class="hint" style="margin-top:8px">The anon key is public by design — row-level security decides what it can read.</div>
+    </div>
+    <div class="sheet__foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn--primary" data-connect>Connect</button>
+    </div>
+  `, {
+    onMount(root) {
+      root.querySelector('[data-connect]').addEventListener('click', async () => {
+        const url = root.querySelector('#sb-url').value.trim().replace(/\/+$/, '');
+        const key = root.querySelector('#sb-key').value.trim();
+        if (!/^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(url)) { toast('Paste the project URL', 'err'); return; }
+        if (key.length < 40) { toast('Paste the anon public key', 'err'); return; }
+        const btn = root.querySelector('[data-connect]');
+        btn.disabled = true;
+        btn.textContent = 'Connecting…';
+        const ok = await configureSync({ url, key });
+        closeSheet();
+        toast(ok ? 'Accounts connected' : 'Could not connect', ok ? 'ok' : 'err');
+        ctx.rerender();
+      });
+    },
+  });
+}
+
+function openSignIn(ctx) {
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Sign in</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <label class="field"><span class="field__l">Email</span>
+        <input class="input" id="in-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false"></label>
+      <label class="field" style="margin-top:8px"><span class="field__l">Password</span>
+        <input class="input" id="in-pass" type="password" autocomplete="current-password"></label>
+      <div id="in-err" class="hint" style="color:var(--danger);margin-top:8px"></div>
+    </div>
+    <div class="sheet__foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn--primary" data-submit>Sign in</button>
+    </div>
+  `, {
+    onMount(root) {
+      const err = root.querySelector('#in-err');
+      const submit = async () => {
+        const btn = root.querySelector('[data-submit]');
+        btn.disabled = true;
+        btn.textContent = 'Signing in…';
+        const res = await signIn({
+          email: root.querySelector('#in-email').value.trim(),
+          password: root.querySelector('#in-pass').value,
+        });
+        btn.disabled = false;
+        btn.textContent = 'Sign in';
+        if (res.error) { err.textContent = res.error; return; }
+        closeSheet();
+        if (res.needsMfa) { toast('Enter your 2FA code'); openMfaVerify(ctx); return; }
+        toast('Signed in', 'ok');
+        ctx.rerender();
+      };
+      root.querySelector('[data-submit]').addEventListener('click', submit);
+      root.querySelector('#in-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    },
+  });
+}
+
+function openSignUp(ctx) {
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Create account</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <label class="field"><span class="field__l">Username</span>
+        <input class="input" id="up-name" placeholder="yourname" autocapitalize="off" autocomplete="username" spellcheck="false"></label>
+      <div class="hint" style="margin-top:4px">3–20 characters: a–z, 0–9 or _. Friends find you with this.</div>
+      <label class="field" style="margin-top:10px"><span class="field__l">Email</span>
+        <input class="input" id="up-email" type="email" inputmode="email" autocomplete="email" autocapitalize="off" spellcheck="false"></label>
+      <label class="field" style="margin-top:8px"><span class="field__l">Password</span>
+        <input class="input" id="up-pass" type="password" autocomplete="new-password"></label>
+      <div id="up-msg" class="hint" style="margin-top:8px"></div>
+    </div>
+    <div class="sheet__foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn--primary" data-submit>Create</button>
+    </div>
+  `, {
+    onMount(root) {
+      const msg = root.querySelector('#up-msg');
+      const submit = async () => {
+        const btn = root.querySelector('[data-submit]');
+        btn.disabled = true;
+        btn.textContent = 'Creating…';
+        const res = await signUp({
+          username: root.querySelector('#up-name').value,
+          email: root.querySelector('#up-email').value.trim(),
+          password: root.querySelector('#up-pass').value,
+        });
+        btn.disabled = false;
+        btn.textContent = 'Create';
+        if (res.error) {
+          msg.style.color = 'var(--danger)';
+          msg.textContent = res.error;
+          return;
+        }
+        if (res.needsConfirm) {
+          msg.style.color = 'var(--accent)';
+          msg.textContent = 'Account created. Confirm the email Supabase just sent, then sign in. (Turn off email confirmations in Supabase for instant sign-in.)';
+          return;
+        }
+        closeSheet();
+        toast('Account created', 'ok');
+        ctx.rerender();
+      };
+      root.querySelector('[data-submit]').addEventListener('click', submit);
+      root.querySelector('#up-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    },
+  });
+}
+
+function openUsername(ctx) {
+  const current = (auth.profile && auth.profile.username) || '';
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Change username</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <label class="field"><span class="field__l">Username</span>
+        <input class="input" id="un-name" value="${esc(current)}" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+      <div class="hint" style="margin-top:6px">3–20 characters: a–z, 0–9 or _. This is what friends search for.</div>
+      <div id="un-msg" class="hint" style="color:var(--danger);margin-top:8px"></div>
+    </div>
+    <div class="sheet__foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn--primary" data-save>Save</button>
+    </div>
+  `, {
+    onMount(root) {
+      root.querySelector('[data-save]').addEventListener('click', async () => {
+        const res = await saveUsername(root.querySelector('#un-name').value);
+        if (res.error) { root.querySelector('#un-msg').textContent = res.error; return; }
+        closeSheet();
+        toast('Username updated', 'ok');
+        ctx.rerender();
+      });
+    },
+  });
+}
+
+function openMfaVerify(ctx) {
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Two-factor code</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <label class="field"><span class="field__l">6-digit code</span>
+        <input class="input input--num" id="mfa-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></label>
+      <div id="mfa-msg" class="hint" style="color:var(--danger);margin-top:8px"></div>
+    </div>
+    <div class="sheet__foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn--primary" data-verify>Verify</button>
+    </div>
+  `, {
+    onMount(root) {
+      const go = async () => {
+        const res = await verifyMfa(root.querySelector('#mfa-code').value);
+        if (res.error) { root.querySelector('#mfa-msg').textContent = res.error; return; }
+        closeSheet();
+        toast('Signed in', 'ok');
+        ctx.rerender();
+      };
+      root.querySelector('[data-verify]').addEventListener('click', go);
+      root.querySelector('#mfa-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    },
+  });
+}
+
+async function openTwoFactor(ctx) {
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Two-factor authentication</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <div class="row" style="justify-content:center;gap:10px;padding:14px 0"><span class="spinner"></span><span class="tiny muted">Checking…</span></div>
+    </div>
+  `);
+
+  let factors = [];
+  try { factors = await refreshFactors(); } catch { factors = []; }
+  const active = factors.find((f) => f.status === 'verified');
+
+  if (active) {
+    openSheet(`
+      <div class="sheet__head">
+        <div class="sheet__title">Two-factor authentication</div>
+        <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+      </div>
+      <div class="sheet__body">
+        <div class="card card--tight" style="border-color:rgba(160,255,180,.3)">
+          <div class="row" style="gap:8px;align-items:center">
+            <span class="badge badge--lime">on</span>
+            <span class="tiny muted">Authenticator app · added ${esc(joinedLabel(active.created_at))}</span>
+          </div>
+          <div class="hint" style="margin-top:8px">Signing in asks for a 6-digit code after your password.</div>
+        </div>
+        <div class="hint" style="margin-top:10px">Phone-number 2FA needs an SMS provider (Twilio) connected to the project — the authenticator app is the free option and is stronger than SMS.</div>
+        <button class="btn btn--sm btn--ghost btn--block" style="margin-top:12px;color:var(--danger)" data-off>Turn off 2FA</button>
+      </div>
+    `, {
+      onMount(root) {
+        root.querySelector('[data-off]').addEventListener('click', async () => {
+          const res = await disableTotp(active.id);
+          if (res.error) { toast(res.error, 'err'); return; }
+          await refreshFactors();
+          closeSheet();
+          toast('2FA turned off');
+          ctx.rerender();
+        });
+      },
+    });
+    return;
+  }
+
+  // not enrolled yet
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Turn on 2FA</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <div class="row" style="justify-content:center;gap:10px;padding:14px 0"><span class="spinner"></span><span class="tiny muted">Creating a secret…</span></div>
+    </div>
+  `);
+
+  let enrollment;
+  try {
+    enrollment = await enrollTotp();
+  } catch (err) {
+    openSheet(`
+      <div class="sheet__head">
+        <div class="sheet__title">Turn on 2FA</div>
+        <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+      </div>
+      <div class="sheet__body"><div class="hint" style="color:var(--danger)">${esc(err.message || String(err))}</div></div>
+    `);
+    return;
+  }
+
+  openSheet(`
+    <div class="sheet__head">
+      <div class="sheet__title">Turn on 2FA</div>
+      <button class="btn btn--bare" data-close aria-label="Close">${icon('x')}</button>
+    </div>
+    <div class="sheet__body">
+      <div class="hint">Add this secret to your authenticator app (Google Authenticator, 1Password, iOS Passwords → “Set up code”), then enter the 6-digit code it shows.</div>
+      <div class="card card--tight" style="margin-top:10px">
+        <div class="label" style="margin-bottom:6px">Secret</div>
+        <div class="mono" id="totp-secret" style="font-size:13px;word-break:break-all;letter-spacing:.06em">${esc(enrollment.secret)}</div>
+        <button class="btn btn--sm btn--ghost btn--block" style="margin-top:8px" data-copy>Copy secret</button>
+      </div>
+      <label class="field" style="margin-top:10px"><span class="field__l">6-digit code</span>
+        <input class="input input--num" id="totp-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000"></label>
+      <div id="totp-msg" class="hint" style="color:var(--danger);margin-top:8px"></div>
+    </div>
+    <div class="sheet__foot">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn--primary" data-confirm>Turn on</button>
+    </div>
+  `, {
+    onMount(root) {
+      root.querySelector('[data-copy]').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(enrollment.secret); toast('Secret copied', 'ok'); }
+        catch { toast('Copy failed — select it manually', 'err'); }
+      });
+      root.querySelector('[data-confirm]').addEventListener('click', async () => {
+        const res = await confirmTotp(enrollment.id, root.querySelector('#totp-code').value);
+        if (res.error) { root.querySelector('#totp-msg').textContent = res.error; return; }
+        await refreshFactors();
+        closeSheet();
+        toast('2FA is on', 'ok');
+        ctx.rerender();
+      });
+    },
+  });
 }
