@@ -67,9 +67,9 @@ Full walkthrough, including Netlify Drop and GitHub Pages: `DEPLOY-iPHONE.md`.
 ## Food scanning
 
 One engine, one question: what is on the plate, and how much of it. It is already on:
-**You → Food scanning → Smartest mode** works on a fresh install, with no key, no account and no
-setup. Anthropic and OpenAI are still there for anyone with a key of theirs; on-device scanning is
-gone as a mode.
+**You → Food scanning → Smartest mode** works on a fresh install with no key and no setup, through the
+account that already gated the app. Anthropic and OpenAI are still there for anyone with a key of
+theirs; on-device scanning is gone as a mode.
 
 **Smartest mode (default, free tier).** The photo goes to Google's vision model, which reads the
 plate instead of matching it against ImageNet labels. The prompt is written to name every visible
@@ -78,36 +78,36 @@ included), return per-item kcal · P · C · F consistent with 4/4/9, flag low c
 alternative dish in `notes`, and answer JSON only. You then edit any number or use 0.5×–1.5×
 before logging. The result is labelled with the model that produced it.
 
-- **Nothing to paste.** The build carries a shared free-tier key in `cloud-key.js`, so scanning
-  works the moment the app loads. It is a public value: anyone with the app URL can read it. That is
-  the trade for zero setup — it can only call the free tier, and its daily quota is shared by
-  everyone using the app. Pasting your own key (free, no card:
-  [aistudio.google.com](https://aistudio.google.com/app/apikey)) switches you to your own quota and
-  stops using the shared one.
-- **The shared key is never written to storage.** A device that never pasted a key keeps using
-  whatever `cloud-key.js` exports, so rotating the key (replace the string, rebuild, bump `VERSION`)
-  reaches every device at once. A device with its own key is not touched.
-- The key a user pastes is stored on this device and sent only to the provider they picked. The
-  photo is sent for the request and is not stored by the app.
+- **Nothing to paste, and nothing to steal.** The Google key lives on the Supabase project as the
+  `GEMINI_API_KEY` secret, and the browser reaches it through the `scan` Edge Function. A photo is
+  posted to that function, the function adds the key and calls Google. `cloud-key.js` ships empty, so
+  reading the public bundle finds no credential. Only a signed-in account can call the function.
+- **The key is never written to storage.** A device without its own key stores `key: ''`, which means
+  "go through the scan service". Rotating the secret on the project changes nothing on any phone — no
+  rebuild, no update.
+- **Your own key still works.** Pasting one (free, no card:
+  [aistudio.google.com](https://aistudio.google.com/app/apikey)) stores it on this device and calls
+  Google directly, spending your quota instead of the project's. *Use ENDURA's scanner* clears it back
+  to the server path.
+- The photo is sent for the request and is not stored by the app.
 - **The model chain is the reliability layer.** Google retires model names for new keys
-  (`gemini-2.5-flash` already is) and 503s the newest flash under load, so the scanner races the
-  top two candidates, takes the first answer, cancels the loser, and walks the rest in order. A
-  retired name is swapped for the one that works and saved, so the next scan is direct. A bad key
-  fails in under a second with a plain message and no chain walk.
-- **A tapped-out shared key says so.** A 429 on the built-in key reads *"The shared scanner is at
-  its free limit right now — add your own free key, or try again later"* rather than blaming the
-  user's connection.
+  (`gemini-2.5-flash` already is) and 503s the newest flash under load, so the function walks the
+  chain and returns whichever answered. A retired name is swapped for the one that works and saved,
+  so the next scan is direct. A bad key fails in under a second with a plain message and no chain
+  walk.
+- **A tapped-out key says so.** A 429 reads *"The scanner is at its free limit right now — add your
+  own free key, or try again later"* rather than blaming the user's connection.
 - Model names are editable, so a newer model can be typed in without a new build.
-- If everything cloud fails — offline, dead key, all models busy — the scanner **falls back to the
-  on-device pass** and says why above the answer instead of dead-ending. That fallback is internal;
-  it is not a mode you pick.
+- If everything cloud fails — offline, missing session, all models busy — the scanner **falls back to
+  the on-device pass** and says why above the answer instead of dead-ending. That fallback is
+  internal; it is not a mode you pick.
 
 ### Putting the key on a server (scan proxy)
 
-The shared key above is public by nature — a static site cannot hide a value it has to use. The real
-fix is a proxy: the browser posts the photo to a small function on the Supabase project the app
-already uses, the function adds the Google key (a project secret) and returns the answer. Nothing
-holding a usable key ever reaches a device.
+A static site cannot hide a value it has to use, so the key sits in a function instead: the browser
+posts the photo to a small function on the Supabase project the app already uses, the function adds
+the Google key (a project secret) and returns the answer. Nothing holding a usable key ever reaches a
+device.
 
 - Source: `supabase/functions/scan/index.ts`. It verifies the caller's Supabase session before
   calling Google, so a random visitor cannot spend the quota, and it walks the same model chain as
@@ -120,14 +120,15 @@ holding a usable key ever reaches a device.
   powershell -ExecutionPolicy Bypass -File tools\deploy-scan-proxy.ps1 -GeminiKey 'AQ...'
   ```
 
-  or do it by hand: Dashboard → Edge Functions → *Deploy new function* → name it `scan`, paste
-  `index.ts`, add the secret `GEMINI_API_KEY`.
-- The app prefers the proxy the moment it exists and the user is signed in. Until then — or if the
-  function is missing, blocked or erroring — it falls through to the direct call, so nothing breaks
-  while it is being switched on. A missing function is remembered for the page session, so only the
-  first scan pays for the probe.
-- After it is proven live, delete the `PARTS` value from `cloud-key.js`: the proxy becomes the only
-  path and the repo stops carrying a key at all.
+  or do it by hand: Dashboard → Edge Functions → *Deploy a new function* → *Via Editor* → name it
+  `scan`, paste `index.ts`, *Deploy function*. Then Dashboard → Edge Functions → **Secrets** → add
+  `GEMINI_API_KEY` with the key as the value → *Save* (secrets apply without redeploying).
+- The app calls the function for Smartest mode whenever the user is signed in and has no key of their
+  own. A missing function (404) or an unreachable one is remembered for the page session, and the
+  scanner drops to the on-device pass instead of hanging.
+- Live since `en-v24`: bundle carries no key, storage holds `key: ''`, a burger photo answers through
+  `POST /functions/v1/scan` in **1.6 s**, and no request ever goes to `generativelanguage.googleapis.com`
+  from the browser.
 
 **On-device fallback (no UI, no upload).** TF.js MobileNet v2 runs in the browser, loads once, and
 classifies three passes (full frame, plate area, tight centre). What it returns is *evidence*, not
@@ -380,14 +381,14 @@ Scanning, on **Smartest mode**:
   oil 5 g**, 492 kcal total, `high confidence`, four editable rows and one tap to log
 - bad key: fails in 285 ms with *"Gemini rejected that key. Copy it whole from aistudio.google.com
   and save it in You → Food scanning."* — no chain walk, no raw 400
-- no key: tapping Camera/Gallery shows *"Smartest mode needs a key"* with **Add the free key** and
-  **Pick the food instead**, and does not open the file picker first (kept as the safety net for the
-  case where the built-in key is removed from the build)
+- no key and no session: tapping Camera/Gallery shows *"Smartest mode needs a sign-in"* with
+  **Open settings** and **Pick the food instead**, and does not open the file picker first
 - migration: a device with `cloud.provider: 'none'` saved reads back as `gemini` /
   `gemini-3.5-flash-lite` with its key intact; the card shows three choices (Smartest mode ·
   Anthropic · OpenAI), no On-device
-- Food page badge reads `Smartest mode` with a key and `Add a key` without one; results carry the
-  model that actually answered (`Smartest mode · gemini-3.5-flash-lite`)
+- Food page badge reads `Smartest mode` when scanning can run (own key or a session) and `Add a key`
+  when it cannot; results carry the model that actually answered
+  (`Smartest mode · gemini-3.5-flash-lite`)
 - cloud failure still falls back instead of dead-ending: *"Smartest mode couldn't answer — … Showing
   a basic on-device guess instead"*, then **Cheeseburger**, 303 kcal, alternatives Pizza / Hot dog /
   Sandwich
@@ -413,6 +414,17 @@ Scanning, on **Smartest mode**:
 - GitHub's secret scanner rejects a push containing a raw Google key (`422 Secret detected in
   content`), so `cloud-key.js` assembles the value from three fragments — same public key, push
   accepted
+- **en-v24, key off the browser**: `scan` Edge Function deployed on the project with
+  `GEMINI_API_KEY` as a secret; `cloud-key.js` shipped empty (851 bytes, byte-identical to the file
+  in the repo, no `AQ.`/`AIza` string anywhere in the bundle); a burger photo from a signed-in
+  account answers `POST /functions/v1/scan` **200 in 1.6 s** → 502 kcal, `gemini-3.5-flash-lite`,
+  with **zero** requests to `generativelanguage.googleapis.com`; `ft.settings` and `kv/settings` both
+  hold `cloud.key: ''`; no console errors
+- the function only answers a real session: an `Authorization` header is required and the JWT is
+  checked against `/auth/v1/user` before Google is called, so a signed-out visitor gets 401 rather
+  than a free scan
+- the settings card now reads *"Using ENDURA's scanner"* with a lime badge, the button says **Use
+  ENDURA's scanner**, and the copy states the key is on the server, not in the app
 
 Close friends, end to end on the live project with two throwaway accounts (`@selftest_a`,
 `@selftest_b`):
@@ -430,8 +442,8 @@ Close friends, end to end on the live project with two throwaway accounts (`@sel
 - viewer honours the payload's units: `80.4 kg` / `12,800 kg` metric vs `177.3 lb` / `28,219 lb`
   imperial, waist `84 cm` vs `33.1 in`
 
-Not verified here: real camera capture on iOS/Android, audio beep volume, install prompt on a
-physical device, and cloud estimation with a live API key.
+Not verified here: real camera capture on iOS/Android, audio beep volume, and install prompt on a
+physical device.
 
 ## Known gaps
 
