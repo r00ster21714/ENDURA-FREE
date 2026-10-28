@@ -1,5 +1,7 @@
 /* ENDURA vision: on-device food classification + optional cloud estimation */
 
+import { usesSharedKey } from './cloud-key.js';
+
 const TF_URL = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js';
 const MN_URL = 'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js';
 
@@ -23,19 +25,19 @@ function loadScript(src, timeout = 45000) {
 
 /**
  * Loads MobileNet (ImageNet) once. Throws with a readable message when the
- * CDN or the weights are unreachable â€” callers fall back to manual entry.
+ * CDN or the weights are unreachable — callers fall back to manual entry.
  */
 export function loadLocalModel(onStatus = () => {}) {
   if (modelPromise) return modelPromise;
   modelPromise = (async () => {
     modelState.status = 'loading';
-    onStatus('Starting vision engineâ€¦');
+    onStatus('Starting vision engine…');
     if (!window.tf) await loadScript(TF_URL);
     if (!window.mobilenet) await loadScript(MN_URL);
-    onStatus('Getting the scanner readyâ€¦');
+    onStatus('Getting the scanner ready…');
     const model = await window.mobilenet.load({ version: 2, alpha: 1.0, maxDetections: 5 });
     modelState.status = 'ready';
-    modelState.detail = 'MobileNet v2 Â· on-device';
+    modelState.detail = 'MobileNet v2 · on-device';
     onStatus('Ready');
     return model;
   })().catch((err) => {
@@ -50,7 +52,7 @@ export function loadLocalModel(onStatus = () => {}) {
 /** @returns {Promise<Array<{label:string, score:number}>>} */
 export async function classify(canvas, onStatus) {
   const model = await loadLocalModel(onStatus);
-  onStatus('Reading the photoâ€¦');
+  onStatus('Reading the photo…');
   const preds = await model.classify(canvas, 15);
   return preds.map((p) => ({ label: p.className, score: p.probability }));
 }
@@ -60,7 +62,7 @@ export async function classify(canvas, onStatus) {
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 /**
- * Cheap colour/texture fingerprint of the frame. Not a classifier â€” 5k pixels
+ * Cheap colour/texture fingerprint of the frame. Not a classifier — 5k pixels
  * of statistics that let `matchVisual` order candidates inside a family
  * (a golden swirled roll and a pale white loaf produce different numbers).
  * @returns {{light:number,sat:number,warm:number,tex:number}|null}
@@ -219,7 +221,7 @@ async function apiFetch(url, opts) {
     return await fetch(url, opts);
   } catch (err) {
     if (err.name === 'AbortError') throw err;
-    if (!navigator.onLine) throw new Error('You are offline â€” cloud estimation needs a connection');
+    if (!navigator.onLine) throw new Error('You are offline — cloud estimation needs a connection');
     const host = (() => { try { return new URL(url).host; } catch { return 'the API'; } })();
     throw new Error(`The browser blocked ${host}'s response (CORS). Check the key, and that the model name is one that still exists.`);
   }
@@ -266,7 +268,9 @@ async function geminiOnce(model, key, imagePart, signal) {
     err.status = res.status;
     if (res.status === 400 || res.status === 403 || res.status === 401) {
       if (/api key|api_key|credential|permission|unauthenticated|invalid/i.test(raw)) {
-        err.friendly = 'Gemini rejected that key. Copy it whole from aistudio.google.com and save it in You â†’ Food scanning.';
+        err.friendly = usesSharedKey(key)
+          ? 'The scanner key built into the app was rejected. Paste your own free key in You → Food scanning.'
+          : 'Gemini rejected that key. Copy it whole from aistudio.google.com and save it in You → Food scanning.';
       } else {
         err.friendly = raw;
       }
@@ -278,7 +282,11 @@ async function geminiOnce(model, key, imagePart, signal) {
       err.friendly = 'That model name is retired for new keys.';
     } else if (res.status === 429) {
       err.tryNext = true;
-      err.friendly = 'Free-tier limit reached on that model.';
+      // The shared key's daily quota is shared by everyone using the app, so a
+      // 429 there is not the user's fault and not fixable by waiting a minute.
+      err.friendly = usesSharedKey(key)
+        ? 'The shared scanner is at its free limit right now. Add your own free key in You → Food scanning, or try again later.'
+        : 'Free-tier limit reached on that model.';
     } else if (res.status === 503) {
       err.tryNext = true;
       err.friendly = 'Google is busy on that model right now.';

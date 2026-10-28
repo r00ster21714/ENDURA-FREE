@@ -5,6 +5,7 @@ import {
 } from './core.js';
 import { pageHead, acts, switchRow } from './common.js';
 import { CLOUD_MODELS, CLOUD_LABELS } from './vision.js';
+import { SHARED_GEMINI_KEY, usesSharedKey } from './cloud-key.js';
 import {
   auth, configureSync, checkBackend, signIn, signUp, signOut, saveUsername,
   enrollTotp, confirmTotp, disableTotp, verifyMfa, refreshFactors, USERNAME_RE,
@@ -129,6 +130,9 @@ export function render(ctx) {
   const s = state.settings;
   const units = s.units;
   const cloud = s.cloud;
+  // Smartest mode ships with a key, so the field starts empty and scans work
+  // before the user does anything. Only their own key is ever shown.
+  const shared = cloud.provider === 'gemini' && usesSharedKey(cloud.key);
 
   const root = document.createElement('div');
   root.innerHTML = `
@@ -205,7 +209,7 @@ export function render(ctx) {
       <div id="cloud-fields" style="margin-top:12px">
         <label class="field"><span class="field__l">API key</span>
           <div class="row" style="gap:6px">
-            <input class="input grow" id="cloud-key" type="password" placeholder="${cloud.provider === 'gemini' ? 'AIza…' : 'sk-…'}" autocomplete="off" spellcheck="false" value="${esc(cloud.key || '')}">
+            <input class="input grow" id="cloud-key" type="password" placeholder="${shared ? 'Using the shared key' : (cloud.provider === 'gemini' ? 'AIza…' : 'sk-…')}" autocomplete="off" spellcheck="false" value="${esc(shared ? '' : (cloud.key || ''))}">
             <button class="btn btn--icon" data-act="show-key" aria-label="Show key">${icon('search')}</button>
           </div>
         </label>
@@ -217,16 +221,22 @@ export function render(ctx) {
         </label>
         <div class="row" style="gap:8px;margin-top:10px">
           <button class="btn btn--sm btn--primary" data-act="save-cloud">Save</button>
-          <button class="btn btn--sm btn--ghost" data-act="clear-key">Remove key</button>
+          <button class="btn btn--sm btn--ghost" data-act="clear-key">${shared ? 'Use shared key' : 'Remove key'}</button>
         </div>
-        ${cloud.provider === 'gemini' ? `<div class="hint" style="margin-top:8px">Smartest mode runs on Google's vision model. The key is free and needs no card: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--accent)">aistudio.google.com</a> → <em>Create API key</em>. Free keys are rate-limited, so a burst of scans may pause for a minute.</div>` : ''}
-        <div class="hint" style="margin-top:8px">The key is stored on this device and sent only to the provider you pick. Photos are uploaded to that API for estimation.${cloud.provider === 'openai' ? ' OpenAI does not always allow direct browser calls — if you see a CORS error, use Smartest mode.' : ''}</div>
+        ${cloud.provider !== 'gemini' ? '' : shared
+          ? `<div class="hint" style="margin-top:8px">Nothing to set up: scanning already works. The app carries a shared free key, which everyone using it shares, so a busy day can hit the limit. Paste your own key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--accent)">aistudio.google.com</a> (free, no card) to use your own quota instead.</div>`
+          : `<div class="hint" style="margin-top:8px">Smartest mode runs on Google's vision model. The key is free and needs no card: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--accent)">aistudio.google.com</a> → <em>Create API key</em>. Free keys are rate-limited, so a burst of scans may pause for a minute.</div>`}
+        <div class="hint" style="margin-top:8px">${shared
+          ? 'A key you paste is stored on this device and sent only to Google.'
+          : 'The key is stored on this device and sent only to the provider you pick. Photos are uploaded to that API for estimation.'}${cloud.provider === 'openai' ? ' OpenAI does not always allow direct browser calls — if you see a CORS error, use Smartest mode.' : ''}</div>
       </div>
 
       <div class="hint" style="margin-top:10px">
         ${cloud.key
           ? 'The model names every food on the plate and estimates the eaten weight; you adjust the grams before logging. Needs a connection, and the photo is sent for that request only — never stored.'
-          : 'Smartest mode needs a key before it can scan. Add the free Google key above and the scanner turns on: it names each food on the plate and estimates the portion, instead of guessing from a small on-device model. Until then you can still search and pick foods by hand.'}
+          : cloud.provider === 'gemini'
+            ? 'Smartest mode needs a key before it can scan. Add the free Google key above and the scanner turns on: it names each food on the plate and estimates the portion, instead of guessing from a small on-device model. Until then you can still search and pick foods by hand.'
+            : `Paste an ${esc(CLOUD_LABELS[cloud.provider] || 'API')} key above to switch scanning on. Until then you can still search and pick foods by hand.`}
       </div>
     </section>
 
@@ -314,8 +324,14 @@ export function render(ctx) {
   /* provider */
   root.querySelectorAll('[data-prov]').forEach((b) => b.addEventListener('click', async () => {
     const provider = b.dataset.prov;
+    const prev = state.settings.cloud;
     const model = CLOUD_MODELS[provider]?.[0] || '';
-    await saveSettings({ cloud: { provider, model } });
+    // Keys are kept per provider: the built-in one only ever goes to Google, and
+    // a key the user pasted for one API is never sent to another.
+    const own = { ...(prev.own || {}) };
+    if (prev.key && !usesSharedKey(prev.key)) own[prev.provider] = prev.key;
+    const key = provider === 'gemini' ? (own.gemini || SHARED_GEMINI_KEY) : (own[provider] || '');
+    await saveSettings({ cloud: { provider, model, key, own } });
     ctx.rerender();
     setTimeout(() => root.querySelector('#cloud-key')?.focus({ preventScroll: true }), 60);
   }));
@@ -363,15 +379,25 @@ export function render(ctx) {
       const provider = state.settings.cloud.provider;
       const typed = root.querySelector('#cloud-model').value.trim();
       const model = typed || (CLOUD_MODELS[provider] || [])[0] || '';
-      if (!key) { toast('Paste an API key first', 'err'); return; }
-      await saveSettings({ cloud: { provider, key, model } });
+      if (!key) {
+        if (provider === 'gemini' && usesSharedKey(state.settings.cloud.key)) { toast('Scanning already works — nothing to paste', 'ok'); return; }
+        toast('Paste an API key first', 'err');
+        return;
+      }
+      const own = { ...(state.settings.cloud.own || {}), [provider]: key };
+      await saveSettings({ cloud: { provider, key, model, own } });
       toast('Scanning configured', 'ok');
       ctx.rerender();
     },
     'clear-key': async () => {
-      await saveSettings({ cloud: { ...state.settings.cloud, key: '' } });
+      const provider = state.settings.cloud.provider;
+      const own = { ...(state.settings.cloud.own || {}) };
+      delete own[provider];
+      const key = provider === 'gemini' ? SHARED_GEMINI_KEY : '';
+      await saveSettings({ cloud: { ...state.settings.cloud, key, own } });
       root.querySelector('#cloud-key').value = '';
-      toast('Key removed');
+      toast(provider === 'gemini' ? 'Back on the shared key' : 'Key removed');
+      ctx.rerender();
     },
     export: () => exportData(ctx),
     import: () => importData(ctx),
