@@ -149,9 +149,10 @@ Identifying:
 - A mixed plate is several items, not one item called "meal".
 
 Portion (this is the part photos get wrong, so be disciplined):
-- A photo with no ruler, hand, cutlery or packaging has no reliable scale. With no reference, assume an ordinary home serving, never a restaurant platter.
-- Reference weights, cooked and as eaten. Stay near these: burger bun 50 g; beef patty 90 g (a quarter-pound patty is 113 g raw); a whole single-patty burger 110-140 g; slice of bread 35 g; bagel 100 g; tortilla 45 g; cooked rice or pasta 150 g (one cupped hand); cereal 40 g per bowl; cooked chicken breast 130 g; steak 170 g; fish fillet 130 g; one egg 50 g; pizza slice 100 g; medium fries 115 g; side salad 80 g; banana 120 g; apple 180 g; avocado half 70 g; dressing 20 g; oil or butter 7 g; ketchup 15 g; slice of cheese 20 g.
-- Go above those only when the frame proves it: a weight printed on packaging, a hand next to the plate, a whole pizza or a sharing dish. Otherwise stay within about 20% of the reference.
+- A photo with no ruler, hand, cutlery or packaging has no reliable scale. With no reference, use the reference weight below as the serving, never a restaurant platter.
+- Reference weights, cooked and as eaten: burger bun 50 g; beef patty 90 g (a quarter-pound patty is 113 g raw); a whole single-patty burger 110-140 g; slice of bread 35 g; bagel 100 g; tortilla 45 g; cooked rice or pasta 150 g (one cupped hand); cereal 40 g per bowl; cooked chicken breast 130 g; steak 170 g; fish fillet 130 g; one egg 50 g; pizza slice 100 g; medium fries 115 g; side salad 80 g; banana 120 g; apple 180 g; avocado half 70 g; dressing 20 g; oil or butter 7 g; ketchup 15 g; slice of cheese 20 g.
+- Depart from those numbers only when the frame proves it: a weight printed on packaging, a hand next to the plate, a whole pizza, a sharing dish, or a portion visibly filling the plate. Unproven, the reference weight is the answer.
+- If the frame proves a bigger portion, scale it up by the amount the frame shows, not by default.
 - When two weights are both plausible, choose the smaller one. People read a photo as bigger than the plate really is, so the generous answer is usually the wrong one.
 - Give the cooked weight of the part actually eaten. Exclude bones, shells, garnish and what gets left.
 - Count the fat you can see: a sheen is 3-5 g of oil, not a tablespoon. Visible sauces and dressings count.
