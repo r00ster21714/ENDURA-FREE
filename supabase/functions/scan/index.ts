@@ -29,6 +29,18 @@ const reply = (body, status = 200) => new Response(JSON.stringify(body), {
   headers: { ...CORS, 'Content-Type': 'application/json' },
 });
 
+/* The gateway key used to verify the caller. Newer projects only expose the
+ * JSON dictionaries (publishable/secret keys) and no longer inject the legacy
+ * SUPABASE_ANON_KEY, so fall back through both. */
+const firstKey = (json) => {
+  try {
+    const dict = JSON.parse(json || '{}');
+    return dict.default || Object.values(dict)[0] || '';
+  } catch {
+    return '';
+  }
+};
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return reply({ error: 'POST only' }, 405);
@@ -37,7 +49,9 @@ Deno.serve(async (req) => {
   if (!/^Bearer\s+\S+/i.test(auth)) return reply({ error: 'Sign in to scan' }, 401);
 
   const supaUrl = Deno.env.get('SUPABASE_URL');
-  const anon = Deno.env.get('SUPABASE_ANON_KEY');
+  const anon = Deno.env.get('SUPABASE_ANON_KEY')
+    || firstKey(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS'))
+    || firstKey(Deno.env.get('SUPABASE_SECRET_KEYS'));
   if (!supaUrl || !anon) return reply({ error: 'Function is missing its Supabase env' }, 500);
 
   // Verify the caller's session. A signed-out visitor cannot use this as a free
