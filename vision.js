@@ -305,11 +305,55 @@ async function geminiOnce(model, key, imagePart, signal) {
   return { result: normalizeCloudResult(extractJson(text)), model };
 }
 
+/* 'unknown' until the app learns whether the scan function is deployed on this
+   project. A 404 or a network failure marks it missing for the rest of the page
+   session, so every scan does not pay for a probe that cannot succeed. */
+let proxyState = 'unknown';
+
+/* One call to the Supabase function. It returns Google's raw text; parsing and
+   normalising stay here so the server stays a dumb relay. */
+async function viaProxy(dataUrl, model, proxy) {
+  const url = String(proxy.url).replace(/\/+$/, '') + '/functions/v1/scan';
+  const t = timeout(30000);
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      signal: t.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: proxy.key || '',
+        Authorization: 'Bearer ' + proxy.token,
+      },
+      body: JSON.stringify({ image: dataUrl, prompt: PROMPT + '\n\n' + ASK, model }),
+    });
+  } catch {
+    const e = new Error('Scan proxy unreachable');
+    e.proxyMiss = true;
+    throw e;
+  } finally {
+    t.done();
+  }
+  if (res.status === 404) {
+    const e = new Error('Scan proxy not deployed');
+    e.proxyMiss = true;
+    throw e;
+  }
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body || !body.text) {
+    throw new Error((body && body.error) || `Scan proxy ${res.status}`);
+  }
+  return { result: normalizeCloudResult(extractJson(body.text)), model: body.model || model };
+}
+
 /**
  * @param {string} dataUrl jpeg data URL
  * @param {{provider:'openai'|'anthropic'|'gemini', key:string, model?:string}} cfg
+ * @param {{url?:string, key?:string, token?:string}} [proxy] Supabase project the
+ *   scan function lives in. When present and the user is signed in, the photo
+ *   goes there instead and the Google key never touches the browser.
  */
-export async function cloudAnalyze(dataUrl, cfg) {
+export async function cloudAnalyze(dataUrl, cfg, proxy) {
   if (!cfg || !cfg.key) throw new Error('No API key configured');
   const provider = cfg.provider;
   const model = cfg.model || CLOUD_MODELS[provider]?.[0];
@@ -319,6 +363,22 @@ export async function cloudAnalyze(dataUrl, cfg) {
 
   try {
     if (provider === 'gemini') {
+      // The proxy is the whole point of the backend: the key stays on the
+      // server. If it is not deployed yet (404) or the call fails, the direct
+      // path below still answers, so nothing regresses while it is switched on.
+      if (proxy && proxy.url && proxy.token && proxyState !== 'missing') {
+        try {
+          const out = await viaProxy(dataUrl, model, proxy);
+          lastGoodGemini = out.model;
+          out.result.model = out.model;
+          if (out.model !== model) out.result.modelChanged = true;
+          return out.result;
+        } catch (err) {
+          if (err.proxyMiss) proxyState = 'missing';
+          // A working proxy that rejects the call is still worth a direct try:
+          // the shared key is the safety net until this path is proven.
+        }
+      }
       const imagePart = { inline_data: { mime_type: 'image/jpeg', data: b64 } };
       // Google's free tier is uneven: the newest flash can be 503 while the
       // lite one answers in a second, and old names are retired outright. So

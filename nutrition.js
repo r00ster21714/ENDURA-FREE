@@ -5,6 +5,7 @@ import {
 import { pageHead, macroCard, dateNav, acts } from './common.js';
 import { searchFoods, FOODS, matchVisual } from './data.js';
 import { classify, cloudAnalyze, mergePreds, imageFeatures, CLOUD_LABELS } from './vision.js';
+import { auth } from './auth.js';
 
 /* Scan result: one answer, up to three one-tap alternatives, then the picker.
    The "See all" button only exists when there is more than one candidate, so
@@ -209,7 +210,12 @@ export function openScanner(ctx) {
           if (cfg.key) {
             status('Reading the plate…');
             try {
-              const result = await cloudAnalyze(full.dataUrl, cfg);
+              // Signed in on this project → the photo goes through the app's own
+              // scan function and the Google key stays on the server. The direct
+              // call is the fallback until that function is deployed.
+              const sync = state.settings.sync || {};
+              const proxy = { url: sync.url, key: sync.key, token: auth.session?.access_token || '' };
+              const result = await cloudAnalyze(full.dataUrl, cfg, proxy);
               // Google retired the saved model name mid-flight: keep the one
               // that just answered so the next scan skips the dead name.
               if (result.retired && result.model && result.model !== cfg.model) {
