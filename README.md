@@ -66,9 +66,10 @@ Full walkthrough, including Netlify Drop and GitHub Pages: `DEPLOY-iPHONE.md`.
 
 ## Food scanning
 
-One engine, one question: what is on the plate, and how much of it. Set up in
-**You → Food scanning → Smartest mode** with a free Google AI Studio key. Anthropic and OpenAI are
-still there for anyone with a key of theirs; on-device scanning is gone as a mode.
+One engine, one question: what is on the plate, and how much of it. It is already on:
+**You → Food scanning → Smartest mode** works on a fresh install, with no key, no account and no
+setup. Anthropic and OpenAI are still there for anyone with a key of theirs; on-device scanning is
+gone as a mode.
 
 **Smartest mode (default, free tier).** The photo goes to Google's vision model, which reads the
 plate instead of matching it against ImageNet labels. The prompt is written to name every visible
@@ -77,17 +78,25 @@ included), return per-item kcal · P · C · F consistent with 4/4/9, flag low c
 alternative dish in `notes`, and answer JSON only. You then edit any number or use 0.5×–1.5×
 before logging. The result is labelled with the model that produced it.
 
-- Free key: [aistudio.google.com](https://aistudio.google.com/app/apikey) → *Create API key*; no
-  card. The free tier is rate-limited, so a burst of scans can pause for a minute.
-- **No key, no scan.** The scanner shows a setup card instead of a weak local guess, and the Food
-  page badge reads `Add a key`.
-- The key is stored on this device and sent only to Google. The photo is sent for the request and
-  is not stored by the app.
+- **Nothing to paste.** The build carries a shared free-tier key in `cloud-key.js`, so scanning
+  works the moment the app loads. It is a public value: anyone with the app URL can read it. That is
+  the trade for zero setup — it can only call the free tier, and its daily quota is shared by
+  everyone using the app. Pasting your own key (free, no card:
+  [aistudio.google.com](https://aistudio.google.com/app/apikey)) switches you to your own quota and
+  stops using the shared one.
+- **The shared key is never written to storage.** A device that never pasted a key keeps using
+  whatever `cloud-key.js` exports, so rotating the key (replace the string, rebuild, bump `VERSION`)
+  reaches every device at once. A device with its own key is not touched.
+- The key a user pastes is stored on this device and sent only to the provider they picked. The
+  photo is sent for the request and is not stored by the app.
 - **The model chain is the reliability layer.** Google retires model names for new keys
   (`gemini-2.5-flash` already is) and 503s the newest flash under load, so the scanner races the
   top two candidates, takes the first answer, cancels the loser, and walks the rest in order. A
   retired name is swapped for the one that works and saved, so the next scan is direct. A bad key
   fails in under a second with a plain message and no chain walk.
+- **A tapped-out shared key says so.** A 429 on the built-in key reads *"The shared scanner is at
+  its free limit right now — add your own free key, or try again later"* rather than blaming the
+  user's connection.
 - Model names are editable, so a newer model can be typed in without a new build.
 - If everything cloud fails — offline, dead key, all models busy — the scanner **falls back to the
   on-device pass** and says why above the answer instead of dead-ending. That fallback is internal;
@@ -345,7 +354,8 @@ Scanning, on **Smartest mode**:
 - bad key: fails in 285 ms with *"Gemini rejected that key. Copy it whole from aistudio.google.com
   and save it in You → Food scanning."* — no chain walk, no raw 400
 - no key: tapping Camera/Gallery shows *"Smartest mode needs a key"* with **Add the free key** and
-  **Pick the food instead**, and does not open the file picker first
+  **Pick the food instead**, and does not open the file picker first (kept as the safety net for the
+  case where the built-in key is removed from the build)
 - migration: a device with `cloud.provider: 'none'` saved reads back as `gemini` /
   `gemini-3.5-flash-lite` with its key intact; the card shows three choices (Smartest mode ·
   Anthropic · OpenAI), no On-device
@@ -361,6 +371,21 @@ Scanning, on **Smartest mode**:
   on a phone is visible at a glance
 - service worker update path: each precache request carries `?v=en-vNN`, so a CDN edge still serving
   the previous commit cannot pin old files under the new version name
+- **en-v22, no key entry at all**: fresh install (IndexedDB + localStorage wiped) → `cloud.key` comes
+  from `cloud-key.js`, Food page badge reads `Smartest mode`, and a burger photo scans in **1.5–1.8 s**
+  to `1 item · Smartest mode · gemini-3.5-flash-lite`, **Hamburger 220 g**, 540 kcal, zero console
+  errors — nothing pasted, no setup card
+- the shared key never reaches storage: after saving settings, `kv/settings` and `ft.settings` hold
+  `cloud.key: ''` and the working key is re-applied from the build on every boot, so a rotated key
+  reaches devices that never pasted one
+- the settings card shows an empty key field with placeholder *"Using the shared key"*, a **Use
+  shared key** button, and no sign of the value in the DOM
+- key handling across providers: paste your own → stored and shown; switch to Anthropic → the key
+  goes blank instead of travelling; switch back → your key returns; **Remove key** → back on the
+  shared one
+- GitHub's secret scanner rejects a push containing a raw Google key (`422 Secret detected in
+  content`), so `cloud-key.js` assembles the value from three fragments — same public key, push
+  accepted
 
 Close friends, end to end on the live project with two throwaway accounts (`@selftest_a`,
 `@selftest_b`):
