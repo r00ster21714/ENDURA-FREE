@@ -30,7 +30,7 @@ tools/make-icons.ps1    regenerates the PNG icons
 
 Every runtime file sits at the repo root on purpose: GitHub's web uploader flattens
 loose files dragged out of a subfolder, so a flat layout can't be deployed wrong.
-`endura-deploy/` is a copy of exactly those 25 runtime files.
+`endura-deploy/` is a copy of exactly those 26 runtime files.
 
 ## Run it
 
@@ -97,6 +97,20 @@ before logging. The result is labelled with the model that produced it.
   walk.
 - **A tapped-out key says so.** A 429 reads *"The scanner is at its free limit right now — add your
   own free key, or try again later"* rather than blaming the user's connection.
+- **Portions are deliberately conservative.** A photo with no ruler or hand has no reliable scale, and
+  the models are known to answer big — a plain single-patty burger first came back as one 220 g /
+  540 kcal item, roughly double the real thing. The prompt now carries reference weights for common
+  foods (bun 50 g, patty 90 g, rice or pasta 150 g, chicken breast 130 g, pizza slice 100 g, oil
+  7 g …) and treats them as the answer: the model leaves a reference number only when the frame
+  proves it — packaging weight, a hand next to the plate, a whole pizza, a sharing dish, a portion
+  visibly filling the plate — and then scales by what the frame shows. When two weights are
+  plausible it picks the smaller one, because a photo reads bigger than the plate really is. The
+  same scan now answers bun 50 g + patty 90 g + lettuce 10 g → **367 kcal**, or 412 kcal when it
+  also counts the oil sheen on the patty, and the result lists components instead of one inflated
+  lump. The 1.25× / 1.5× pills are still there for a genuinely big plate.
+- A physically impossible portion is corrected in code too: no item can exceed 9.5 kcal/g (pure
+  oil), so a model arithmetic slip cannot log a four-digit snack; macros are scaled with it.
+  Ordinary over-estimates are left alone — the weighing discipline in the prompt handles those.
 - Model names are editable, so a newer model can be typed in without a new build.
 - If everything cloud fails — offline, missing session, all models busy — the scanner **falls back to
   the on-device pass** and says why above the answer instead of dead-ending. That fallback is
