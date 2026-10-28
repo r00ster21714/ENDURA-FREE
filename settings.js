@@ -5,7 +5,7 @@ import {
 } from './core.js';
 import { pageHead, acts, switchRow } from './common.js';
 import { CLOUD_MODELS, CLOUD_LABELS } from './vision.js';
-import { SHARED_GEMINI_KEY, usesSharedKey } from './cloud-key.js';
+import { usesSharedKey } from './cloud-key.js';
 import {
   auth, configureSync, checkBackend, signIn, signUp, signOut, saveUsername,
   enrollTotp, confirmTotp, disableTotp, verifyMfa, refreshFactors, USERNAME_RE,
@@ -130,8 +130,8 @@ export function render(ctx) {
   const s = state.settings;
   const units = s.units;
   const cloud = s.cloud;
-  // Smartest mode ships with a key, so the field starts empty and scans work
-  // before the user does anything. Only their own key is ever shown.
+  // Smartest mode runs on the server's key, so the field starts empty and scans
+  // work before the user does anything. Only their own key is ever shown.
   const shared = cloud.provider === 'gemini' && usesSharedKey(cloud.key);
 
   const root = document.createElement('div');
@@ -198,7 +198,7 @@ export function render(ctx) {
     <section class="card" style="margin-top:12px">
       <div class="card__head">
         <h2>Food scanning</h2>
-        <span class="badge ${cloud.key ? 'badge--lime' : 'badge--muted'}">${esc(CLOUD_LABELS[cloud.provider] || 'Smartest mode')}</span>
+        <span class="badge ${cloud.key || shared ? 'badge--lime' : 'badge--muted'}">${esc(CLOUD_LABELS[cloud.provider] || 'Smartest mode')}</span>
       </div>
       <div class="seg" id="prov-seg">
         <button data-prov="gemini" aria-pressed="${cloud.provider === 'gemini'}">Smartest mode</button>
@@ -209,7 +209,7 @@ export function render(ctx) {
       <div id="cloud-fields" style="margin-top:12px">
         <label class="field"><span class="field__l">API key</span>
           <div class="row" style="gap:6px">
-            <input class="input grow" id="cloud-key" type="password" placeholder="${shared ? 'Using the shared key' : (cloud.provider === 'gemini' ? 'AIza…' : 'sk-…')}" autocomplete="off" spellcheck="false" value="${esc(shared ? '' : (cloud.key || ''))}">
+            <input class="input grow" id="cloud-key" type="password" placeholder="${shared ? 'Using ENDURA\'s scanner' : (cloud.provider === 'gemini' ? 'AIza…' : 'sk-…')}" autocomplete="off" spellcheck="false" value="${esc(shared ? '' : (cloud.key || ''))}">
             <button class="btn btn--icon" data-act="show-key" aria-label="Show key">${icon('search')}</button>
           </div>
         </label>
@@ -221,10 +221,10 @@ export function render(ctx) {
         </label>
         <div class="row" style="gap:8px;margin-top:10px">
           <button class="btn btn--sm btn--primary" data-act="save-cloud">Save</button>
-          <button class="btn btn--sm btn--ghost" data-act="clear-key">${shared ? 'Use shared key' : 'Remove key'}</button>
+          <button class="btn btn--sm btn--ghost" data-act="clear-key">${shared ? 'Use ENDURA\'s scanner' : 'Remove key'}</button>
         </div>
         ${cloud.provider !== 'gemini' ? '' : shared
-          ? `<div class="hint" style="margin-top:8px">Nothing to set up: scanning already works. The app carries a shared free key, which everyone using it shares, so a busy day can hit the limit. Paste your own key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--accent)">aistudio.google.com</a> (free, no card) to use your own quota instead.</div>`
+          ? `<div class="hint" style="margin-top:8px">Nothing to set up: scanning already works. Photos go to ENDURA's scan service, which holds the Google key — the key is never in this app, and only signed-in accounts can call it. Paste your own key from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--accent)">aistudio.google.com</a> (free, no card) to spend your own quota instead.</div>`
           : `<div class="hint" style="margin-top:8px">Smartest mode runs on Google's vision model. The key is free and needs no card: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--accent)">aistudio.google.com</a> → <em>Create API key</em>. Free keys are rate-limited, so a burst of scans may pause for a minute.</div>`}
         <div class="hint" style="margin-top:8px">${shared
           ? 'A key you paste is stored on this device and sent only to Google.'
@@ -232,10 +232,10 @@ export function render(ctx) {
       </div>
 
       <div class="hint" style="margin-top:10px">
-        ${cloud.key
+        ${cloud.key || shared
           ? 'The model names every food on the plate and estimates the eaten weight; you adjust the grams before logging. Needs a connection, and the photo is sent for that request only — never stored.'
           : cloud.provider === 'gemini'
-            ? 'Smartest mode needs a key before it can scan. Add the free Google key above and the scanner turns on: it names each food on the plate and estimates the portion, instead of guessing from a small on-device model. Until then you can still search and pick foods by hand.'
+            ? 'Smartest mode needs a signed-in account or a key before it can scan. Sign in, or add the free Google key above: it names each food on the plate and estimates the portion, instead of guessing from a small on-device model. Until then you can still search and pick foods by hand.'
             : `Paste an ${esc(CLOUD_LABELS[cloud.provider] || 'API')} key above to switch scanning on. Until then you can still search and pick foods by hand.`}
       </div>
     </section>
@@ -326,11 +326,12 @@ export function render(ctx) {
     const provider = b.dataset.prov;
     const prev = state.settings.cloud;
     const model = CLOUD_MODELS[provider]?.[0] || '';
-    // Keys are kept per provider: the built-in one only ever goes to Google, and
+    // Keys are kept per provider: the server's key only ever serves Google, and
     // a key the user pasted for one API is never sent to another.
     const own = { ...(prev.own || {}) };
     if (prev.key && !usesSharedKey(prev.key)) own[prev.provider] = prev.key;
-    const key = provider === 'gemini' ? (own.gemini || SHARED_GEMINI_KEY) : (own[provider] || '');
+    // Blank on Smartest mode means "go through the app's scan service".
+    const key = provider === 'gemini' ? (own.gemini || '') : (own[provider] || '');
     await saveSettings({ cloud: { provider, model, key, own } });
     ctx.rerender();
     setTimeout(() => root.querySelector('#cloud-key')?.focus({ preventScroll: true }), 60);
@@ -393,10 +394,12 @@ export function render(ctx) {
       const provider = state.settings.cloud.provider;
       const own = { ...(state.settings.cloud.own || {}) };
       delete own[provider];
-      const key = provider === 'gemini' ? SHARED_GEMINI_KEY : '';
+      // Blank restores "the server holds the key"; it works for every provider
+      // because a blank key never becomes a request to Google or OpenAI.
+      const key = '';
       await saveSettings({ cloud: { ...state.settings.cloud, key, own } });
       root.querySelector('#cloud-key').value = '';
-      toast(provider === 'gemini' ? 'Back on the shared key' : 'Key removed');
+      toast(provider === 'gemini' ? 'Back on ENDURA\'s scanner' : 'Key removed');
       ctx.rerender();
     },
     export: () => exportData(ctx),

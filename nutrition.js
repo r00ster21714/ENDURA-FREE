@@ -12,6 +12,12 @@ import { auth } from './auth.js';
    its binding is optional on purpose. */
 let viewDate = today();
 
+/* Scanning is on when this device holds a key of its own, or when Smartest mode
+ * can reach the app's scan function (signed-in session on the project). No key
+ * is shipped in the bundle any more, so the session is what makes it work. */
+const serverScan = () => !!(auth.session?.access_token && state.settings.sync?.url);
+const scannerOn = (cloud) => !!(cloud && (cloud.key || (cloud.provider === 'gemini' && serverScan())));
+
 const groupOf = (ts) => {
   const h = new Date(ts).getHours();
   if (h >= 4 && h < 11) return 'Breakfast';
@@ -29,7 +35,7 @@ export function render(ctx) {
     name: g,
     items: meals.filter((m) => groupOf(m.ts) === g),
   })).filter((g) => g.items.length);
-  const cloudOn = !!s.cloud.key;
+  const cloudOn = scannerOn(s.cloud);
 
   const root = document.createElement('div');
   root.innerHTML = `
@@ -132,7 +138,7 @@ function pickImage(camera) {
 
 export function openScanner(ctx) {
   const s = state.settings;
-  const cloudOn = !!s.cloud.key;
+  const cloudOn = scannerOn(s.cloud);
 
   openSheet(`
     <div class="sheet__head">
@@ -163,7 +169,7 @@ export function openScanner(ctx) {
       <div id="scan-result"></div>
       <div class="tiny muted" style="line-height:1.45">
         ${cloudOn
-          ? `Using <strong>${esc(CLOUD_LABELS[s.cloud.provider] || 'Smartest mode')}</strong>${s.cloud.model ? ' · ' + esc(s.cloud.model) : ''}. The photo goes to that API for the request only, never stored.`
+          ? `Using <strong>${esc(CLOUD_LABELS[s.cloud.provider] || 'Smartest mode')}</strong>${s.cloud.model ? ' · ' + esc(s.cloud.model) : ''}. The photo goes to the scanning service for the request only, never stored.`
           : 'Scanning is off until there is a key. Add the free one in You → Food scanning — photos are never stored either way.'}
         <button class="btn btn--bare tiny" data-act="vision-settings" style="padding:2px 4px;text-decoration:underline">Change</button>
       </div>
@@ -187,7 +193,7 @@ export function openScanner(ctx) {
       sheetRoot.querySelectorAll('[data-shot]').forEach((b) => b.addEventListener('click', async () => {
         // No key means no scan at all: ask for the key before opening the
         // camera, so nobody picks a photo that can't be read.
-        if (!state.settings.cloud.key) {
+        if (!scannerOn(state.settings.cloud)) {
           showNeedKey(sheetRoot, ctx);
           return;
         }
@@ -207,7 +213,7 @@ export function openScanner(ctx) {
           // general label. If the call fails (offline, bad key, rate limit) the
           // on-device pass still answers and says why.
           let cloudNote = '';
-          if (cfg.key) {
+          if (cfg.key || (cfg.provider === 'gemini' && serverScan())) {
             status('Reading the plate…');
             try {
               // Signed in on this project → the photo goes through the app's own
@@ -274,9 +280,9 @@ function showNeedKey(root, ctx) {
   const box = root.querySelector('#scan-result');
   box.innerHTML = `
     <div class="card">
-      <div style="font-weight:650;font-size:14px">Smartest mode needs a key</div>
-      <div class="tiny muted" style="margin-top:4px;line-height:1.45">Scanning reads the photo with Google's vision model. The key is free, takes about a minute, and stays on this phone.</div>
-      <button class="btn btn--sm btn--primary btn--block" style="margin-top:12px" data-setup>Add the free key</button>
+      <div style="font-weight:650;font-size:14px">Smartest mode needs a sign-in</div>
+      <div class="tiny muted" style="margin-top:4px;line-height:1.45">Scanning runs on ENDURA's own key, so there is nothing to paste — but the scan goes through your account. Sign in again, or add your own free Google key.</div>
+      <button class="btn btn--sm btn--primary btn--block" style="margin-top:12px" data-setup>Open settings</button>
       <button class="btn btn--sm btn--ghost btn--block" style="margin-top:6px" data-pick>Pick the food instead</button>
     </div>`;
   box.querySelector('[data-setup]').addEventListener('click', () => {

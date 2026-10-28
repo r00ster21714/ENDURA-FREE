@@ -1,6 +1,6 @@
 /* ENDURA core: storage, state, formatting, UI primitives */
 
-import { SHARED_GEMINI_KEY, usesSharedKey } from './cloud-key.js';
+import { usesSharedKey } from './cloud-key.js';
 
 /* ---------------- tiny DOM helpers ---------------- */
 
@@ -182,10 +182,12 @@ export const DEFAULT_SETTINGS = {
   heightCm: 175,
   goalWeightKg: null,
   barKg: 20,
-  // Smartest mode is the default and needs nothing from the user: the build
-  // carries a shared free-tier key, so a fresh install scans immediately. A
-  // device that pastes its own key uses that instead.
-  cloud: { provider: 'gemini', model: 'gemini-3.5-flash-lite', key: SHARED_GEMINI_KEY },
+  // Smartest mode is the default and needs nothing from the user: the Google
+  // key sits in the Supabase project as GEMINI_API_KEY and is reached through
+  // the `scan` Edge Function, so a fresh install scans immediately and the key
+  // is never part of this bundle. A device that pastes its own key uses that
+  // instead, straight to Google.
+  cloud: { provider: 'gemini', model: 'gemini-3.5-flash-lite', key: '' },
   sync: {
     url: 'https://npeinkgyioxlgotmwqea.supabase.co',
     key: 'sb_publishable_vvsQjcOBHNjhtwIopVJK-w_zbunWTCA',
@@ -248,8 +250,8 @@ function mergeSettings(base, patch) {
     out.cloud.provider = 'gemini';
     if (!out.cloud.model) out.cloud.model = base.cloud.model;
   }
-  // A blank key on Smartest mode means "use the key that ships with the app",
-  // so clearing the field (or an install that predates it) never leaves the
+  // A blank key on Smartest mode means "scan through the app's own server", so
+  // clearing the field (or an install that predates it) never leaves the
   // scanner switched off. Anthropic and OpenAI still need a key of their own.
   if (out.cloud.provider === 'gemini' && !out.cloud.key) out.cloud.key = base.cloud.key;
   // A saved blank must not erase the built-in server: an install that predates
@@ -260,9 +262,9 @@ function mergeSettings(base, patch) {
 
 export async function saveSettings(patch) {
   state.settings = mergeSettings(state.settings, patch);
-  // The built-in key is never written to storage. It belongs to the build, so a
-  // rotated key reaches every device that never pasted one of its own — and a
-  // device keeps working when the old shared key is revoked.
+  // A blank key is never written as anything but a blank: blank means "the
+  // server holds the key", so a rotated server secret reaches every device that
+  // never pasted one of its own.
   const stored = state.settings.cloud.provider === 'gemini' && usesSharedKey(state.settings.cloud.key)
     ? { ...state.settings, cloud: { ...state.settings.cloud, key: '' } }
     : state.settings;

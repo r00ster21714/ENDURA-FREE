@@ -269,7 +269,7 @@ async function geminiOnce(model, key, imagePart, signal) {
     if (res.status === 400 || res.status === 403 || res.status === 401) {
       if (/api key|api_key|credential|permission|unauthenticated|invalid/i.test(raw)) {
         err.friendly = usesSharedKey(key)
-          ? 'The scanner key built into the app was rejected. Paste your own free key in You → Food scanning.'
+          ? 'Gemini rejected the key. Paste your own free key in You → Food scanning, or sign back in so the scan service can use its key.'
           : 'Gemini rejected that key. Copy it whole from aistudio.google.com and save it in You → Food scanning.';
       } else {
         err.friendly = raw;
@@ -282,10 +282,10 @@ async function geminiOnce(model, key, imagePart, signal) {
       err.friendly = 'That model name is retired for new keys.';
     } else if (res.status === 429) {
       err.tryNext = true;
-      // The shared key's daily quota is shared by everyone using the app, so a
-      // 429 there is not the user's fault and not fixable by waiting a minute.
+      // A 429 on the project key is not the user's fault and not fixable by
+      // waiting a minute, so it points at their own key.
       err.friendly = usesSharedKey(key)
-        ? 'The shared scanner is at its free limit right now. Add your own free key in You → Food scanning, or try again later.'
+        ? 'The scanner is at its free limit right now. Add your own free key in You → Food scanning, or try again later.'
         : 'Free-tier limit reached on that model.';
     } else if (res.status === 503) {
       err.tryNext = true;
@@ -354,8 +354,12 @@ async function viaProxy(dataUrl, model, proxy) {
  *   goes there instead and the Google key never touches the browser.
  */
 export async function cloudAnalyze(dataUrl, cfg, proxy) {
-  if (!cfg || !cfg.key) throw new Error('No API key configured');
-  const provider = cfg.provider;
+  const provider = cfg?.provider;
+  // Smartest mode needs no key of its own any more: the proxy holds it, so a
+  // device with a session and no pasted key is fully equipped. Anthropic and
+  // OpenAI still call their APIs directly and still need a key.
+  const haveProxy = !!(proxy && proxy.url && proxy.token && proxyState !== 'missing');
+  if (!cfg || (!cfg.key && !(provider === 'gemini' && haveProxy))) throw new Error('No API key configured');
   const model = cfg.model || CLOUD_MODELS[provider]?.[0];
   if (!model) throw new Error('Unknown provider: ' + provider);
   const t = timeout(60000);
@@ -366,7 +370,7 @@ export async function cloudAnalyze(dataUrl, cfg, proxy) {
       // The proxy is the whole point of the backend: the key stays on the
       // server. If it is not deployed yet (404) or the call fails, the direct
       // path below still answers, so nothing regresses while it is switched on.
-      if (proxy && proxy.url && proxy.token && proxyState !== 'missing') {
+      if (haveProxy) {
         try {
           const out = await viaProxy(dataUrl, model, proxy);
           lastGoodGemini = out.model;
@@ -375,8 +379,11 @@ export async function cloudAnalyze(dataUrl, cfg, proxy) {
           return out.result;
         } catch (err) {
           if (err.proxyMiss) proxyState = 'missing';
-          // A working proxy that rejects the call is still worth a direct try:
-          // the shared key is the safety net until this path is proven.
+          // A working proxy that rejects the call is still worth a direct try
+          // when this device has its own key; without one there is nothing left
+          // to try, so the reason travels up and the scanner falls back to
+          // on-device.
+          if (!cfg.key) throw err;
         }
       }
       const imagePart = { inline_data: { mime_type: 'image/jpeg', data: b64 } };

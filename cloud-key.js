@@ -1,31 +1,21 @@
-/* ENDURA shared scanning key.
+/* ENDURA scanning key.
  *
- * The app scans out of the box: nobody pastes a key, nobody makes a Google
- * account first. This value ships with the build and is used whenever the
- * device has no key of its own.
+ * Nothing ships in this file. The Google key lives in the Supabase project as
+ * the GEMINI_API_KEY secret, and the browser reaches it through the `scan`
+ * Edge Function (supabase/functions/scan/index.ts). A photo is posted to that
+ * function, the function adds the key and calls Google, and the key never
+ * reaches a device — so the public bundle cannot be read for it.
  *
- * It is public. Everything served from a page is readable by anyone with the
- * URL, so treat it as a shared free-tier credential, not a secret: it can only
- * call the free tier, and its daily quota is shared by everyone using the app.
- * A user who pastes their own key in You -> Food scanning stops sharing this.
+ * A device may still paste its own key in You -> Food scanning. That key is
+ * stored locally and used directly, which spends the user's own quota instead
+ * of the project's.
  *
- * The string is assembled from pieces because GitHub's secret scanner refuses a
- * push containing a raw Google key (it cannot tell a deliberately public client
- * key from a leaked one). Nothing about the value changes.
- *
- * Rotating it is one line per piece: create a new key at aistudio.google.com,
- * split it as below, then rebuild and push with a new VERSION in sw.js.
+ * The value below stays empty on purpose; keep it empty.
  */
 
-const PARTS = [
-  'AQ.Ab8RN6KmZneapAK0X-',
-  'CQZ9qwcWJmOOiDNDi5UGU',
-  'Ls_YZZPNYhg',
-];
+export const SHARED_GEMINI_KEY = '';
 
-export const SHARED_GEMINI_KEY = PARTS.join('');
-
-/* True when the device is riding the shared key rather than a user's own. */
+/* True when the device is riding the server's key rather than a user's own. */
 export function usesSharedKey(key) {
   return !key || key === SHARED_GEMINI_KEY;
 }
