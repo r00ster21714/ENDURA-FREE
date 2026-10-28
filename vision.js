@@ -221,7 +221,7 @@ async function apiFetch(url, opts) {
     if (err.name === 'AbortError') throw err;
     if (!navigator.onLine) throw new Error('You are offline â€” cloud estimation needs a connection');
     const host = (() => { try { return new URL(url).host; } catch { return 'the API'; } })();
-    throw new Error(`The browser blocked ${host}'s response (CORS). Check the key, or switch to on-device scanning.`);
+    throw new Error(`The browser blocked ${host}'s response (CORS). Check the key, and that the model name is one that still exists.`);
   }
 }
 
