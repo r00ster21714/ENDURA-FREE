@@ -66,29 +66,37 @@ Full walkthrough, including Netlify Drop and GitHub Pages: `DEPLOY-iPHONE.md`.
 
 ## Food scanning
 
-Two engines, picked in **You → Food scanning**: **Gemini** (or Anthropic / OpenAI) with your own
-key, or **on-device** with no key and no upload.
+One engine, one question: what is on the plate, and how much of it. Set up in
+**You → Food scanning → Smartest mode** with a free Google AI Studio key. Anthropic and OpenAI are
+still there for anyone with a key of theirs; on-device scanning is gone as a mode.
 
-**Cloud (recommended, free tier).** Paste a Google AI Studio key and the photo goes to Gemini,
-which reads the plate instead of guessing from ImageNet labels. The prompt is written to name
-every visible food, estimate the **eaten** weight in grams (bones and shells excluded, cooking oil
-and dressing included), return per-item kcal · P · C · F consistent with 4/4/9, flag low
-confidence with the alternative dish in `notes`, and answer JSON only. You then edit any number or
-use 0.5×–1.5× before logging. Answers are labelled with the provider that produced them.
+**Smartest mode (default, free tier).** The photo goes to Google's vision model, which reads the
+plate instead of matching it against ImageNet labels. The prompt is written to name every visible
+food, estimate the **eaten** weight in grams (bones and shells excluded, cooking oil and dressing
+included), return per-item kcal · P · C · F consistent with 4/4/9, flag low confidence with the
+alternative dish in `notes`, and answer JSON only. You then edit any number or use 0.5×–1.5×
+before logging. The result is labelled with the model that produced it.
 
 - Free key: [aistudio.google.com](https://aistudio.google.com/app/apikey) → *Create API key*; no
   card. The free tier is rate-limited, so a burst of scans can pause for a minute.
-- The key is stored on this device and sent only to that provider. The photo is sent for the
-  request and is not stored by the app.
-- If the cloud call fails — offline, bad key, rate limit — the scanner **falls back to the
-  on-device pass automatically** and says why above the answer instead of dead-ending.
+- **No key, no scan.** The scanner shows a setup card instead of a weak local guess, and the Food
+  page badge reads `Add a key`.
+- The key is stored on this device and sent only to Google. The photo is sent for the request and
+  is not stored by the app.
+- **The model chain is the reliability layer.** Google retires model names for new keys
+  (`gemini-2.5-flash` already is) and 503s the newest flash under load, so the scanner races the
+  top two candidates, takes the first answer, cancels the loser, and walks the rest in order. A
+  retired name is swapped for the one that works and saved, so the next scan is direct. A bad key
+  fails in under a second with a plain message and no chain walk.
 - Model names are editable, so a newer model can be typed in without a new build.
+- If everything cloud fails — offline, dead key, all models busy — the scanner **falls back to the
+  on-device pass** and says why above the answer instead of dead-ending. That fallback is internal;
+  it is not a mode you pick.
 
-**On-device (default, no key, no upload).** TF.js MobileNet v2 runs in the browser, loads once,
-and classifies three passes (full frame, plate area, tight centre). What it returns is *evidence*,
-not an answer — ImageNet has no "steak", "rice" or "cinnamon roll" class, and it cannot see
-portions at all, which is why a cloud key is worth it for real meals. Two rules keep the guess
-honest:
+**On-device fallback (no UI, no upload).** TF.js MobileNet v2 runs in the browser, loads once, and
+classifies three passes (full frame, plate area, tight centre). What it returns is *evidence*, not
+an answer — ImageNet has no "steak", "rice" or "cinnamon roll" class, and it cannot see portions at
+all. Two rules keep the guess honest:
 
 - **A direct hit beats a shelf guess.** A label that names a food in the table wins over a family
   expansion for the same photo.
@@ -165,11 +173,10 @@ Limits: it names a dish and a per-100 g estimate — not your portion. The gram 
 the number right. A plate of several things gets the combined estimate; the builder splits it
 exactly.
 
-**Cloud (optional key).** The photo goes to Gemini, Anthropic or OpenAI and comes back with one
-row per food and an estimated portion, which you scale or edit before logging. Gemini has a free
-tier and is the one to use; Anthropic also works directly from the browser. OpenAI does not always
-send CORS headers on error responses, so a bad key shows as a CORS failure — the app says so and
-suggests the alternatives. Keys are stored locally and sent only to the provider. Any cloud failure
+**Smartest mode.** The photo goes to Google and comes back with one row per food and an estimated
+portion, which you scale or edit before logging. Anthropic and OpenAI work too (Anthropic direct
+from the browser; OpenAI does not always send CORS headers on error responses, so a bad key there
+shows as a CORS failure). Keys are stored locally and sent only to the provider. Any cloud failure
 falls back to the on-device pass, with the reason shown above the answer.
 
 ## Accounts, friends and 2FA
@@ -323,21 +330,37 @@ Tested in Chromium against a local server:
 - Friends tab still renders `0 friends / No friends yet` before the migration, because
   `friendsOverview()` retries without the `close` column instead of failing the whole tab
 
-Scanning, with Gemini wired in:
+Scanning, on **Smartest mode**:
 
-- the Gemini request is accepted from the browser (no CORS block, no proxy); a bad key returns
-  Google's 400 and the app maps it to *"Gemini rejected that key. Check it was copied whole, from
-  aistudio.google.com"* instead of showing a raw error
-- cloud failure falls back instead of dead-ending: burger photo with a bad key → *"Cloud read
-  failed — … Showing the on-device guess instead"*, then **Cheeseburger**, 303 kcal, alternatives
-  Pizza / Hot dog / Sandwich
-- on-device path unchanged after the refactor: burger → `cheeseburger 0.99` → **Cheeseburger**
-  (three passes, ~0.8 s on this machine)
-- settings card lists Gemini / Anthropic / OpenAI / On-device, the model field is editable, and the
-  free-tier link plus key hint appear only for Gemini
-- service worker update path: v17 → reload → v18 installed 25 files, and each precache request now
-  carries `?v=en-v18`, so a CDN edge still serving the previous commit cannot pin old files under
-  the new version name (this happened once during this deploy and is why the query string exists)
+- the request is accepted from the browser (no CORS block, no proxy), on a key from AI Studio
+- **Google retired `gemini-2.5-flash` for new keys mid-project** — the API answers 404 with *"no
+  longer available to new users … use models/gemini-3.x"*. That is why a device that had the old
+  default stopped scanning; the chain now notices, swaps to a model that answers, and saves the new
+  name (`settings.cloud.model` updated from `gemini-2.5-flash` → `gemini-3.5-flash-lite` in one scan)
+- the newest flash 503s under load while the lite one answers in ~1.5 s, so the top two candidates
+  are raced: first answer wins, the loser is aborted. Measured on a fresh page with the retired name
+  saved: 2.0 s to a named result, 2.1 s on the repeat (was 22–33 s walking the chain one at a time)
+- a real burger photo → **Hamburger bun 60 g · Beef patty 110 g · Green leaf lettuce 10 g · Cooking
+  oil 5 g**, 492 kcal total, `high confidence`, four editable rows and one tap to log
+- bad key: fails in 285 ms with *"Gemini rejected that key. Copy it whole from aistudio.google.com
+  and save it in You → Food scanning."* — no chain walk, no raw 400
+- no key: tapping Camera/Gallery shows *"Smartest mode needs a key"* with **Add the free key** and
+  **Pick the food instead**, and does not open the file picker first
+- migration: a device with `cloud.provider: 'none'` saved reads back as `gemini` /
+  `gemini-3.5-flash-lite` with its key intact; the card shows three choices (Smartest mode ·
+  Anthropic · OpenAI), no On-device
+- Food page badge reads `Smartest mode` with a key and `Add a key` without one; results carry the
+  model that actually answered (`Smartest mode · gemini-3.5-flash-lite`)
+- cloud failure still falls back instead of dead-ending: *"Smartest mode couldn't answer — … Showing
+  a basic on-device guess instead"*, then **Cheeseburger**, 303 kcal, alternatives Pizza / Hot dog /
+  Sandwich
+- on-device path unchanged: burger → `cheeseburger 0.99` → **Cheeseburger** (three passes, ~0.8 s)
+- the idle "Point at your plate" block now collapses once there is an answer, and the result has a
+  camera button to scan again without closing the sheet
+- settings footer prints the installed cache (`v1.0 · offline-first PWA · en-v19`), so an old build
+  on a phone is visible at a glance
+- service worker update path: each precache request carries `?v=en-vNN`, so a CDN edge still serving
+  the previous commit cannot pin old files under the new version name
 
 Close friends, end to end on the live project with two throwaway accounts (`@selftest_a`,
 `@selftest_b`):
