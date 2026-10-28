@@ -148,14 +148,18 @@ Identifying:
 - Use visible text, packaging, logos and restaurant context when they are legible.
 - A mixed plate is several items, not one item called "meal".
 
-Portion:
-- Anchor the scale on the plate rim, cutlery, a hand, a cup or packaging.
-- Give the cooked weight in grams of the part actually eaten. Exclude bones, shells and garnish that gets left.
-- Count cooking fat. A glossy sauce or a sheen of oil is not calorie-free.
-- If the plate is only partly full, estimate the food that is there, not a full serving.
+Portion (this is the part photos get wrong, so be disciplined):
+- A photo with no ruler, hand, cutlery or packaging has no reliable scale. With no reference, assume an ordinary home serving, never a restaurant platter.
+- Reference weights, cooked and as eaten. Stay near these: burger bun 50 g; beef patty 90 g (a quarter-pound patty is 113 g raw); a whole single-patty burger 110-140 g; slice of bread 35 g; bagel 100 g; tortilla 45 g; cooked rice or pasta 150 g (one cupped hand); cereal 40 g per bowl; cooked chicken breast 130 g; steak 170 g; fish fillet 130 g; one egg 50 g; pizza slice 100 g; medium fries 115 g; side salad 80 g; banana 120 g; apple 180 g; avocado half 70 g; dressing 20 g; oil or butter 7 g; ketchup 15 g; slice of cheese 20 g.
+- Go above those only when the frame proves it: a weight printed on packaging, a hand next to the plate, a whole pizza or a sharing dish. Otherwise stay within about 20% of the reference.
+- When two weights are both plausible, choose the smaller one. People read a photo as bigger than the plate really is, so the generous answer is usually the wrong one.
+- Give the cooked weight of the part actually eaten. Exclude bones, shells, garnish and what gets left.
+- Count the fat you can see: a sheen is 3-5 g of oil, not a tablespoon. Visible sauces and dressings count.
+- If the plate is only partly full, weigh what is there, not a full serving.
 
 Numbers:
 - Per item: kcal, protein, carbs, fat for that portion. Keep them consistent with 4/4/9 kcal per gram.
+- Sanity check: kcal per gram must land between 0.08 (vegetables) and 0.9 (pure fat or oil). If the grams and kcal disagree with that, fix the grams, not the kcal.
 - Grams rounded to 5, macros to one decimal. No ranges, no words in numeric fields.
 
 Honesty:
@@ -187,6 +191,12 @@ const positive = (v) => {
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 10) / 10 : 0;
 };
 
+/* No portion of real food carries more than ~0.95 kcal per gram (that is almost
+   pure fat or oil). A weight that overshoots is usually still self-consistent,
+   so this only stops the physically impossible ones — the portion discipline in
+   the prompt does the rest. Macros are scaled with it so 4/4/9 stays true. */
+const MAX_KCAL_PER_G = 0.95;
+
 export function normalizeCloudResult(raw) {
   const items = Array.isArray(raw?.items) ? raw.items : [];
   const cleaned = items
@@ -199,6 +209,18 @@ export function normalizeCloudResult(raw) {
       carbs: positive(it.carbs),
       fat: positive(it.fat),
     }))
+    .map((it) => {
+      const ceiling = it.grams * MAX_KCAL_PER_G;
+      if (!it.grams || !it.kcal || it.kcal <= ceiling) return it;
+      const f = ceiling / it.kcal;
+      return {
+        ...it,
+        kcal: Math.round(it.kcal * f * 10) / 10,
+        protein: Math.round(it.protein * f * 10) / 10,
+        carbs: Math.round(it.carbs * f * 10) / 10,
+        fat: Math.round(it.fat * f * 10) / 10,
+      };
+    })
     .filter((it) => it.kcal > 0 || it.protein > 0 || it.carbs > 0 || it.fat > 0);
   if (!cleaned.length) throw new Error('No food detected in that photo');
   return {
