@@ -102,6 +102,33 @@ before logging. The result is labelled with the model that produced it.
   on-device pass** and says why above the answer instead of dead-ending. That fallback is internal;
   it is not a mode you pick.
 
+### Putting the key on a server (scan proxy)
+
+The shared key above is public by nature — a static site cannot hide a value it has to use. The real
+fix is a proxy: the browser posts the photo to a small function on the Supabase project the app
+already uses, the function adds the Google key (a project secret) and returns the answer. Nothing
+holding a usable key ever reaches a device.
+
+- Source: `supabase/functions/scan/index.ts`. It verifies the caller's Supabase session before
+  calling Google, so a random visitor cannot spend the quota, and it walks the same model chain as
+  the client.
+- Deploy, one command: create a token at
+  [supabase.com/dashboard/account/tokens](https://supabase.com/dashboard/account/tokens), then
+
+  ```powershell
+  $env:SUPABASE_ACCESS_TOKEN = 'sbp_...'
+  powershell -ExecutionPolicy Bypass -File tools\deploy-scan-proxy.ps1 -GeminiKey 'AQ...'
+  ```
+
+  or do it by hand: Dashboard → Edge Functions → *Deploy new function* → name it `scan`, paste
+  `index.ts`, add the secret `GEMINI_API_KEY`.
+- The app prefers the proxy the moment it exists and the user is signed in. Until then — or if the
+  function is missing, blocked or erroring — it falls through to the direct call, so nothing breaks
+  while it is being switched on. A missing function is remembered for the page session, so only the
+  first scan pays for the probe.
+- After it is proven live, delete the `PARTS` value from `cloud-key.js`: the proxy becomes the only
+  path and the repo stops carrying a key at all.
+
 **On-device fallback (no UI, no upload).** TF.js MobileNet v2 runs in the browser, loads once, and
 classifies three passes (full frame, plate area, tight centre). What it returns is *evidence*, not
 an answer — ImageNet has no "steak", "rice" or "cinnamon roll" class, and it cannot see portions at
