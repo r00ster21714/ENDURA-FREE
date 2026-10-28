@@ -1,6 +1,6 @@
 /* ENDURA service worker — offline shell + model cache */
 
-const VERSION = 'en-v18';
+const VERSION = 'en-v20';
 const CDN_CACHE = 'endura-cdn';
 const SHELL = [
   './',

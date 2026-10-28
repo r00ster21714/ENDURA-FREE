@@ -1,6 +1,6 @@
 import {
   state, totalsFor, mealsFor, addMeal, removeMeal, today, addDays, hhmm, esc, icon, num,
-  openSheet, closeSheet, toast, uid, downscale, fileToBitmap, round1, learnLabel,
+  openSheet, closeSheet, toast, uid, downscale, fileToBitmap, round1, learnLabel, saveSettings,
 } from './core.js';
 import { pageHead, macroCard, dateNav, acts } from './common.js';
 import { searchFoods, FOODS, matchVisual } from './data.js';
@@ -28,7 +28,7 @@ export function render(ctx) {
     name: g,
     items: meals.filter((m) => groupOf(m.ts) === g),
   })).filter((g) => g.items.length);
-  const cloudOn = s.cloud.provider !== 'none';
+  const cloudOn = !!s.cloud.key;
 
   const root = document.createElement('div');
   root.innerHTML = `
@@ -40,12 +40,12 @@ export function render(ctx) {
       <div class="spread">
         <div style="min-width:0">
           <div class="row" style="gap:6px">
-            <span class="badge ${cloudOn ? 'badge--lime' : ''}">${icon(cloudOn ? 'spark' : 'camera')}${cloudOn ? 'Cloud AI' : 'On-device'}</span>
+            <span class="badge ${cloudOn ? 'badge--lime' : ''}">${icon('spark')}${cloudOn ? 'Smartest mode' : 'Add a key'}</span>
           </div>
           <div style="font-weight:680;font-size:15px;margin-top:7px">Scan a meal</div>
           <div class="tiny muted" style="margin-top:2px;max-width:34ch">${cloudOn
-            ? 'Photo goes to your chosen AI provider, which estimates the macros directly.'
-            : 'Identifies the dish on your phone, then pulls macros from the food table. No upload.'}</div>
+            ? 'The vision model names what is on the plate and estimates the portion.'
+            : 'Scanning turns on once the free key is added in You → Food scanning.'}</div>
         </div>
         <button class="btn btn--primary btn--icon" data-act="scan" aria-label="Scan food" style="width:46px;height:46px">${icon('camera')}</button>
       </div>
@@ -131,7 +131,7 @@ function pickImage(camera) {
 
 export function openScanner(ctx) {
   const s = state.settings;
-  const cloudOn = s.cloud.provider !== 'none';
+  const cloudOn = !!s.cloud.key;
 
   openSheet(`
     <div class="sheet__head">
@@ -145,8 +145,8 @@ export function openScanner(ctx) {
           ${icon('camera')}
           <div style="font-weight:650;font-size:14px;margin-bottom:3px">Point at your plate</div>
           <div class="tiny muted" style="max-width:32ch;margin:0 auto 14px">${cloudOn
-            ? 'The model reads the plate and estimates what is on it.'
-            : 'Identified on-device from a small general model. Add a free Gemini key in You → Food scanning for plate-level accuracy.'}</div>
+            ? 'Names every food on the plate and estimates the portion.'
+            : 'Smartest mode needs a free key before it can scan. Add one in You → Food scanning.'}</div>
           <div class="row" style="justify-content:center;gap:8px">
             <button class="btn btn--primary" data-shot="camera">${icon('camera')}Camera</button>
             <button class="btn" data-shot="gallery">${icon('upload')}Gallery</button>
@@ -162,8 +162,8 @@ export function openScanner(ctx) {
       <div id="scan-result"></div>
       <div class="tiny muted" style="line-height:1.45">
         ${cloudOn
-          ? `Using <strong>${esc(CLOUD_LABELS[s.cloud.provider] || s.cloud.provider)}</strong>${s.cloud.model ? ' · ' + esc(s.cloud.model) : ''}. Photo is sent to that API from this device, never stored.`
-          : 'Estimates come from a food-recognition model on this device plus a nutrition table. It is weak on mixed plates — a free Gemini key fixes that. Photos are never saved.'}
+          ? `Using <strong>${esc(CLOUD_LABELS[s.cloud.provider] || 'Smartest mode')}</strong>${s.cloud.model ? ' · ' + esc(s.cloud.model) : ''}. The photo goes to that API for the request only, never stored.`
+          : 'Scanning is off until there is a key. Add the free one in You → Food scanning — photos are never stored either way.'}
         <button class="btn btn--bare tiny" data-act="vision-settings" style="padding:2px 4px;text-decoration:underline">Change</button>
       </div>
     </div>
@@ -175,10 +175,21 @@ export function openScanner(ctx) {
       };
       const busy = (on) => {
         sheetRoot.querySelector('#scan-busy').classList.toggle('hidden', !on);
-        sheetRoot.querySelector('#scan-idle').classList.toggle('hidden', on);
+        // Once there is an answer the photo plus "Point at your plate" are just
+        // clutter above it, so the idle block stays down unless it is cleared.
+        const answered = !!String(sheetRoot.querySelector('#scan-result').innerHTML || '').trim();
+        sheetRoot.querySelector('#scan-idle').classList.toggle('hidden', on || answered);
+        const drop = sheetRoot.querySelector('.scan-drop');
+        if (drop) drop.style.marginBottom = answered || on ? '10px' : '';
       };
 
       sheetRoot.querySelectorAll('[data-shot]').forEach((b) => b.addEventListener('click', async () => {
+        // No key means no scan at all: ask for the key before opening the
+        // camera, so nobody picks a photo that can't be read.
+        if (!state.settings.cloud.key) {
+          showNeedKey(sheetRoot, ctx);
+          return;
+        }
         const file = await pickImage(b.dataset.shot === 'camera');
         if (!file) return;
         busy(true);
@@ -192,15 +203,20 @@ export function openScanner(ctx) {
 
           const cfg = state.settings.cloud;
           // Cloud first when a key exists: it reads the whole plate, not just a
-          // general ImageNet label. If the call fails (offline, bad key, rate
-          // limit) the on-device pass still answers and says why.
+          // general label. If the call fails (offline, bad key, rate limit) the
+          // on-device pass still answers and says why.
           let cloudNote = '';
-          if (cfg.provider !== 'none' && cfg.key) {
+          if (cfg.key) {
             status('Reading the plate…');
             try {
               const result = await cloudAnalyze(full.dataUrl, cfg);
-              busy(false);
+              // Google retired the saved model name mid-flight: keep the one
+              // that just answered so the next scan skips the dead name.
+              if (result.retired && result.model && result.model !== cfg.model) {
+                saveSettings({ cloud: { ...cfg, model: result.model } }).catch(() => {});
+              }
               showCloudResult(sheetRoot, result, thumb.dataUrl, ctx);
+              busy(false);
               return;
             } catch (err) {
               cloudNote = err.message || 'Cloud read failed';
@@ -221,7 +237,6 @@ export function openScanner(ctx) {
           ]);
           const features = imageFeatures(full.canvas);
           const match = matchVisual(preds, state.learned, features);
-          busy(false);
           // Only a frame with nothing recognisable falls back to "pick the
           // food". Any candidate is named with its macros — a low-confidence
           // label is still an answer, and the alternatives are one tap away.
@@ -232,8 +247,9 @@ export function openScanner(ctx) {
           }
           if (cloudNote) {
             const box = sheetRoot.querySelector('#scan-result');
-            box.insertAdjacentHTML('afterbegin', `<div class="tiny" style="color:var(--warn);margin-bottom:8px;line-height:1.45">Cloud read failed — ${esc(cloudNote)} Showing the on-device guess instead.</div>`);
+            box.insertAdjacentHTML('afterbegin', `<div class="tiny" style="color:var(--warn);margin-bottom:8px;line-height:1.45">Smartest mode couldn't answer — ${esc(cloudNote)} Showing a basic on-device guess instead.</div>`);
           }
+          busy(false);
         } catch (err) {
           busy(false);
           showScanError(sheetRoot, err.message || 'Scan failed', ctx);
@@ -245,6 +261,25 @@ export function openScanner(ctx) {
         ctx.navigate('#/settings');
       });
     },
+  });
+}
+
+function showNeedKey(root, ctx) {
+  const box = root.querySelector('#scan-result');
+  box.innerHTML = `
+    <div class="card">
+      <div style="font-weight:650;font-size:14px">Smartest mode needs a key</div>
+      <div class="tiny muted" style="margin-top:4px;line-height:1.45">Scanning reads the photo with Google's vision model. The key is free, takes about a minute, and stays on this phone.</div>
+      <button class="btn btn--sm btn--primary btn--block" style="margin-top:12px" data-setup>Add the free key</button>
+      <button class="btn btn--sm btn--ghost btn--block" style="margin-top:6px" data-pick>Pick the food instead</button>
+    </div>`;
+  box.querySelector('[data-setup]').addEventListener('click', () => {
+    closeSheet();
+    ctx.navigate('#/settings');
+  });
+  box.querySelector('[data-pick]').addEventListener('click', () => {
+    closeSheet();
+    setTimeout(() => openFoodPicker(ctx, { heading: 'Pick the food' }), 40);
   });
 }
 
@@ -642,7 +677,7 @@ function showCloudResult(root, result, photo, ctx) {
     box.innerHTML = `
       <div class="row" style="justify-content:space-between;margin-bottom:8px">
         <span class="badge badge--lime">${icon('spark')}${esc(result.confidence)} confidence</span>
-        <span class="tiny muted">${draft.length} item${draft.length > 1 ? 's' : ''} · ${esc(CLOUD_LABELS[state.settings.cloud.provider] || 'cloud')}</span>
+        <span class="tiny muted">${draft.length} item${draft.length > 1 ? 's' : ''} · ${esc(CLOUD_LABELS[state.settings.cloud.provider] || 'cloud')}${result.model ? ' · ' + esc(result.model) : ''}</span>
       </div>
       <div class="stack--sm" style="display:flex;flex-direction:column;gap:8px">
         ${draft.map((d, i) => `
@@ -669,7 +704,10 @@ function showCloudResult(root, result, photo, ctx) {
         <span class="mono" style="font-size:13px">${Math.round(t.kcal)} kcal · ${Math.round(t.protein)}P ${Math.round(t.carbs)}C ${Math.round(t.fat)}F</span>
       </div>
       ${result.notes ? `<div class="tiny muted" style="margin-top:6px">${esc(result.notes)}</div>` : ''}
-      <button class="btn btn--primary btn--block" data-add style="margin-top:10px">Add ${Math.round(t.kcal)} kcal to log</button>
+      <div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn btn--primary grow" data-add>Add ${Math.round(t.kcal)} kcal to log</button>
+        <button class="btn btn--ghost" data-rescan aria-label="Scan another photo">${icon('camera')}</button>
+      </div>
     `;
 
     box.querySelectorAll('input[data-f]').forEach((inp) => {
@@ -710,6 +748,11 @@ function showCloudResult(root, result, photo, ctx) {
       });
       paint();
     }));
+
+    box.querySelector('[data-rescan]')?.addEventListener('click', () => {
+      closeSheet();
+      setTimeout(() => openScanner(ctx), 60);
+    });
 
     box.querySelector('[data-add]').addEventListener('click', async () => {
       const ts = Date.now();

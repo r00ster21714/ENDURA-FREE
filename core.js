@@ -170,7 +170,7 @@ export const dbClear = (store) => run(store, 'readwrite', (os) => os.clear());
 /* ---------------- state ---------------- */
 
 /* The accounts server ships with the app so a fresh install can create an
- * account without pasting anything. The publishable key is public by design —
+ * account without pasting anything. The publishable key is public by design â€”
  * row-level security is what protects the rows. These are only the defaults;
  * a device that already saved its own values keeps them. */
 export const DEFAULT_SETTINGS = {
@@ -180,7 +180,10 @@ export const DEFAULT_SETTINGS = {
   heightCm: 175,
   goalWeightKg: null,
   barKg: 20,
-  cloud: { provider: 'none', model: '' },
+  // Smartest mode is the default: Google's vision model reads the plate. A key
+  // is required (free tier), so a fresh install is prompted for one instead of
+  // silently falling back to the weak on-device classifier.
+  cloud: { provider: 'gemini', model: 'gemini-3.5-flash-lite', key: '' },
   sync: {
     url: 'https://npeinkgyioxlgotmwqea.supabase.co',
     key: 'sb_publishable_vvsQjcOBHNjhtwIopVJK-w_zbunWTCA',
@@ -237,6 +240,12 @@ function mergeSettings(base, patch) {
   out.cloud = { ...base.cloud, ...(patch.cloud || {}) };
   out.sync = { ...base.sync, ...(patch.sync || {}) };
   out.share = { ...base.share, ...(patch.share || {}) };
+  // On-device scanning is gone as a mode. A device that still has it saved is
+  // moved to Smartest mode, keeping any key it already holds.
+  if (!out.cloud.provider || out.cloud.provider === 'none') {
+    out.cloud.provider = 'gemini';
+    if (!out.cloud.model) out.cloud.model = 'gemini-3.8-flash';
+  }
   // A saved blank must not erase the built-in server: an install that predates
   // the baked-in config would otherwise be left with no accounts at all.
   if (!out.sync.url || !out.sync.key) out.sync = { ...base.sync, ...(out.sync.url ? { url: out.sync.url } : {}), ...(out.sync.key ? { key: out.sync.key } : {}) };

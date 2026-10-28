@@ -23,19 +23,19 @@ function loadScript(src, timeout = 45000) {
 
 /**
  * Loads MobileNet (ImageNet) once. Throws with a readable message when the
- * CDN or the weights are unreachable — callers fall back to manual entry.
+ * CDN or the weights are unreachable â€” callers fall back to manual entry.
  */
 export function loadLocalModel(onStatus = () => {}) {
   if (modelPromise) return modelPromise;
   modelPromise = (async () => {
     modelState.status = 'loading';
-    onStatus('Starting vision engine…');
+    onStatus('Starting vision engineâ€¦');
     if (!window.tf) await loadScript(TF_URL);
     if (!window.mobilenet) await loadScript(MN_URL);
-    onStatus('Getting the scanner ready…');
+    onStatus('Getting the scanner readyâ€¦');
     const model = await window.mobilenet.load({ version: 2, alpha: 1.0, maxDetections: 5 });
     modelState.status = 'ready';
-    modelState.detail = 'MobileNet v2 · on-device';
+    modelState.detail = 'MobileNet v2 Â· on-device';
     onStatus('Ready');
     return model;
   })().catch((err) => {
@@ -50,7 +50,7 @@ export function loadLocalModel(onStatus = () => {}) {
 /** @returns {Promise<Array<{label:string, score:number}>>} */
 export async function classify(canvas, onStatus) {
   const model = await loadLocalModel(onStatus);
-  onStatus('Reading the photo…');
+  onStatus('Reading the photoâ€¦');
   const preds = await model.classify(canvas, 15);
   return preds.map((p) => ({ label: p.className, score: p.probability }));
 }
@@ -60,7 +60,7 @@ export async function classify(canvas, onStatus) {
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 /**
- * Cheap colour/texture fingerprint of the frame. Not a classifier — 5k pixels
+ * Cheap colour/texture fingerprint of the frame. Not a classifier â€” 5k pixels
  * of statistics that let `matchVisual` order candidates inside a family
  * (a golden swirled roll and a pale white loaf produce different numbers).
  * @returns {{light:number,sat:number,warm:number,tex:number}|null}
@@ -190,7 +190,7 @@ export function normalizeCloudResult(raw) {
   const cleaned = items
     .filter((it) => it && (it.name || it.kcal))
     .map((it) => ({
-      name: String(it.name || 'Food').slice(0, 60),
+      name: String(it.name || 'Food').slice(0, 60).replace(/^([a-z])/, (c) => c.toUpperCase()),
       grams: Math.round(positive(it.grams)) || 0,
       kcal: positive(it.kcal),
       protein: positive(it.protein),
@@ -219,17 +219,83 @@ async function apiFetch(url, opts) {
     return await fetch(url, opts);
   } catch (err) {
     if (err.name === 'AbortError') throw err;
-    if (!navigator.onLine) throw new Error('You are offline — cloud estimation needs a connection');
+    if (!navigator.onLine) throw new Error('You are offline â€” cloud estimation needs a connection');
     const host = (() => { try { return new URL(url).host; } catch { return 'the API'; } })();
     throw new Error(`The browser blocked ${host}'s response (CORS). Check the key, or switch to on-device scanning.`);
   }
 }
 
 export const CLOUD_MODELS = {
-  gemini: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'],
+  // Newest first. Google retires names for new keys (2.5-flash already is), so
+  // this list is also the fallback chain: a busy or retired model moves to the
+  // next one instead of failing the scan.
+  gemini: ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'],
   anthropic: ['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-3-5-haiku-latest'],
   openai: ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini'],
 };
+
+const GEMINI_MAX_TRIES = 4;
+
+/* The model that answered last time on this device. Google's newest flash is
+   often 503 under load and old names are retired, so remembering the winner
+   keeps the second scan fast instead of walking the chain again. */
+let lastGoodGemini = null;
+
+/* One Gemini call. Throws an error tagged with what the caller should do next:
+   `tryNext` (busy / rate-limited / retired) vs. a hard failure such as a bad key. */
+async function geminiOnce(model, key, imagePart, signal) {
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
+    + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(key);
+  const res = await apiFetch(url, {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: PROMPT + '\n\n' + ASK }, imagePart] }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 2000,
+        responseMimeType: 'application/json',
+      },
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const raw = body?.error?.message || `Gemini ${res.status}`;
+    const err = new Error(raw);
+    err.status = res.status;
+    if (res.status === 400 || res.status === 403 || res.status === 401) {
+      if (/api key|api_key|credential|permission|unauthenticated|invalid/i.test(raw)) {
+        err.friendly = 'Gemini rejected that key. Copy it whole from aistudio.google.com and save it in You â†’ Food scanning.';
+      } else {
+        err.friendly = raw;
+      }
+    } else if (res.status === 404 || /no longer available|is not found/i.test(raw)) {
+      const m = raw.match(/models\/([a-zA-Z0-9._-]+)/);
+      err.suggested = m ? m[1] : null;
+      err.tryNext = true;
+      err.retired = true;
+      err.friendly = 'That model name is retired for new keys.';
+    } else if (res.status === 429) {
+      err.tryNext = true;
+      err.friendly = 'Free-tier limit reached on that model.';
+    } else if (res.status === 503) {
+      err.tryNext = true;
+      err.friendly = 'Google is busy on that model right now.';
+    } else {
+      err.friendly = raw;
+    }
+    throw err;
+  }
+  const text = (body?.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+  if (!text) {
+    const block = body?.promptFeedback?.blockReason;
+    const err = new Error(block ? 'Gemini blocked that photo (' + block + ')' : 'Gemini returned no answer');
+    err.friendly = err.message;
+    throw err;
+  }
+  return { result: normalizeCloudResult(extractJson(text)), model };
+}
 
 /**
  * @param {string} dataUrl jpeg data URL
@@ -245,41 +311,78 @@ export async function cloudAnalyze(dataUrl, cfg) {
 
   try {
     if (provider === 'gemini') {
-      const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
-        + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(cfg.key);
-      const res = await apiFetch(url, {
-        method: 'POST',
-        signal: t.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            role: 'user',
-            parts: [
-              { text: PROMPT + '\n\n' + ASK },
-              { inline_data: { mime_type: 'image/jpeg', data: b64 } },
-            ],
-          }],
-          generationConfig: {
-            temperature: 0.15,
-            maxOutputTokens: 1200,
-            responseMimeType: 'application/json',
-          },
-        }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const why = body?.error?.message || `Gemini ${res.status}`;
-        throw new Error(/api key|api_key|permission/i.test(why)
-          ? 'Gemini rejected that key. Check it was copied whole, from aistudio.google.com.'
-          : why);
+      const imagePart = { inline_data: { mime_type: 'image/jpeg', data: b64 } };
+      // Google's free tier is uneven: the newest flash can be 503 while the
+      // lite one answers in a second, and old names are retired outright. So
+      // the first pair is raced and the winner cancels the loser; anything
+      // left is tried in order. A bad key aborts on the first hard error.
+      const queue = [model, lastGoodGemini, ...CLOUD_MODELS.gemini].filter(Boolean);
+      const tried = new Set();
+      const deadline = Date.now() + 75000;
+      let last = null;
+      let sawRetired = false;
+
+      const take = (name, out) => {
+        lastGoodGemini = name;
+        out.result.model = name;
+        if (name !== model) out.result.modelChanged = true;
+        if (sawRetired) out.result.retired = true;
+        return out.result;
+      };
+      const hard = (err, name) => {
+        if (err.name === 'AbortError') {
+          err.tryNext = true;
+          err.friendly = name + ' timed out.';
+        }
+        if (err.retired) sawRetired = true;
+        last = err;
+        if (err.suggested && !tried.has(err.suggested)) queue.push(err.suggested);
+        return !err.tryNext ? new Error(err.friendly || err.message) : null;
+      };
+
+      while (queue.length && tried.size < GEMINI_MAX_TRIES && Date.now() < deadline) {
+        const batch = [];
+        while (queue.length && batch.length < (tried.size === 0 ? 2 : 1)) {
+          const name = queue.shift();
+          if (!name || tried.has(name) || batch.includes(name)) continue;
+          tried.add(name);
+          batch.push(name);
+        }
+        if (!batch.length) continue;
+
+        const ms = Math.min(9000, Math.max(6000, deadline - Date.now()));
+        // First answer wins; the loser is aborted so the sheet is not waiting on it.
+        const ctrls = batch.map(() => new AbortController());
+        const timers = ctrls.map((c) => setTimeout(() => c.abort(), ms));
+        const stop = () => { timers.forEach(clearTimeout); };
+        const race = await new Promise((resolve) => {
+          const errs = [];
+          let pending = batch.length;
+          let done = false;
+          batch.forEach((name, i) => {
+            geminiOnce(name, cfg.key, imagePart, ctrls[i].signal).then(
+              (out) => {
+                if (done) return;
+                done = true;
+                stop();
+                ctrls.forEach((c) => c.abort());
+                resolve({ name, out });
+              },
+              (err) => {
+                errs.push({ name, err });
+                pending -= 1;
+                if (!done && pending === 0) { done = true; stop(); resolve({ errs }); }
+              },
+            );
+          });
+        });
+        if (race.out) return take(race.name, race.out);
+        for (const l of race.errs) {
+          const err = hard(l.err, l.name);
+          if (err) throw err;
+        }
       }
-      const text = (body?.candidates?.[0]?.content?.parts || [])
-        .map((p) => p.text || '').join('');
-      if (!text) {
-        const block = body?.promptFeedback?.blockReason;
-        throw new Error(block ? 'Gemini blocked that photo (' + block + ')' : 'Gemini returned no answer');
-      }
-      return normalizeCloudResult(extractJson(text));
+      throw new Error(last?.friendly || last?.message || 'Gemini did not answer');
     }
 
     if (provider === 'openai') {
@@ -348,4 +451,4 @@ export async function cloudAnalyze(dataUrl, cfg) {
   }
 }
 
-export const CLOUD_LABELS = { gemini: 'Google Gemini', anthropic: 'Anthropic', openai: 'OpenAI' };
+export const CLOUD_LABELS = { gemini: 'Smartest mode', anthropic: 'Anthropic', openai: 'OpenAI' };

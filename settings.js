@@ -194,16 +194,15 @@ export function render(ctx) {
     <section class="card" style="margin-top:12px">
       <div class="card__head">
         <h2>Food scanning</h2>
-        <span class="badge ${cloud.provider !== 'none' ? 'badge--lime' : 'badge--muted'}">${cloud.provider === 'none' ? 'on-device' : esc(CLOUD_LABELS[cloud.provider] || cloud.provider)}</span>
+        <span class="badge ${cloud.key ? 'badge--lime' : 'badge--muted'}">${esc(CLOUD_LABELS[cloud.provider] || 'Smartest mode')}</span>
       </div>
-      <div class="seg" id="prov-seg" style="flex-wrap:wrap">
-        <button data-prov="gemini" aria-pressed="${cloud.provider === 'gemini'}">Gemini</button>
+      <div class="seg" id="prov-seg">
+        <button data-prov="gemini" aria-pressed="${cloud.provider === 'gemini'}">Smartest mode</button>
         <button data-prov="anthropic" aria-pressed="${cloud.provider === 'anthropic'}">Anthropic</button>
         <button data-prov="openai" aria-pressed="${cloud.provider === 'openai'}">OpenAI</button>
-        <button data-prov="none" aria-pressed="${cloud.provider === 'none'}">On-device</button>
       </div>
 
-      <div id="cloud-fields" class="${cloud.provider === 'none' ? 'hidden' : ''}" style="margin-top:12px">
+      <div id="cloud-fields" style="margin-top:12px">
         <label class="field"><span class="field__l">API key</span>
           <div class="row" style="gap:6px">
             <input class="input grow" id="cloud-key" type="password" placeholder="${cloud.provider === 'gemini' ? 'AIza…' : 'sk-…'}" autocomplete="off" spellcheck="false" value="${esc(cloud.key || '')}">
@@ -220,14 +219,14 @@ export function render(ctx) {
           <button class="btn btn--sm btn--primary" data-act="save-cloud">Save</button>
           <button class="btn btn--sm btn--ghost" data-act="clear-key">Remove key</button>
         </div>
-        ${cloud.provider === 'gemini' ? `<div class="hint" style="margin-top:8px">Gemini has a free tier, no card: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--accent)">aistudio.google.com</a> → <em>Create API key</em>. Free keys are rate-limited, so a burst of scans may pause for a minute.</div>` : ''}
-        <div class="hint" style="margin-top:8px">The key is stored on this device and sent only to the provider you pick. Photos are uploaded to that API for estimation.${cloud.provider === 'openai' ? ' OpenAI does not always allow direct browser calls — if you see a CORS error, use Gemini or on-device scanning.' : ''}</div>
+        ${cloud.provider === 'gemini' ? `<div class="hint" style="margin-top:8px">Smartest mode runs on Google's vision model. The key is free and needs no card: <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener" style="color:var(--accent)">aistudio.google.com</a> → <em>Create API key</em>. Free keys are rate-limited, so a burst of scans may pause for a minute.</div>` : ''}
+        <div class="hint" style="margin-top:8px">The key is stored on this device and sent only to the provider you pick. Photos are uploaded to that API for estimation.${cloud.provider === 'openai' ? ' OpenAI does not always allow direct browser calls — if you see a CORS error, use Smartest mode.' : ''}</div>
       </div>
 
       <div class="hint" style="margin-top:10px">
-        ${cloud.provider === 'none'
-          ? 'Offline mode: a food-recognition model runs in the browser, then macros come from the built-in nutrition table — dishes, baked goods and pastries included. It only knows a few hundred general categories, so mixed plates and portions are rough. A free Gemini key makes it a lot better; photos are still never saved.'
-          : 'Cloud mode: the model looks at the photo, names every food on the plate and estimates the eaten weight, then you adjust the grams before logging. Needs a connection. The photo is sent to the provider for that request and is not stored by the app.'}
+        ${cloud.key
+          ? 'The model names every food on the plate and estimates the eaten weight; you adjust the grams before logging. Needs a connection, and the photo is sent for that request only — never stored.'
+          : 'Smartest mode needs a key before it can scan. Add the free Google key above and the scanner turns on: it names each food on the plate and estimates the portion, instead of guessing from a small on-device model. Until then you can still search and pick foods by hand.'}
       </div>
     </section>
 
@@ -258,7 +257,7 @@ export function render(ctx) {
       <div class="spread">
         <div>
           <div style="font-weight:650;font-size:14px">ENDURA</div>
-          <div class="tiny muted">v1.0 · offline-first PWA</div>
+          <div class="tiny muted" id="build-line">v1.0 · offline-first PWA</div>
         </div>
         <a class="btn btn--sm btn--ghost" href="#/today">Done</a>
       </div>
@@ -271,6 +270,15 @@ export function render(ctx) {
     await saveSettings({ units: b.dataset.unit });
     ctx.rerender();
   }));
+
+  /* which build is actually installed — a phone can hold an older cache */
+  if (window.caches) {
+    caches.keys().then((keys) => {
+      const k = keys.find((x) => x.startsWith('en-v'));
+      const line = root.querySelector('#build-line');
+      if (line) line.textContent = k ? 'v1.0 · offline-first PWA · ' + k : 'v1.0 · offline-first PWA · not cached yet';
+    }).catch(() => {});
+  }
 
   /* close-friend sharing: each switch flips one stored flag, then the week is
    * republished (or withdrawn) so the server matches what the list says. */
@@ -306,10 +314,10 @@ export function render(ctx) {
   /* provider */
   root.querySelectorAll('[data-prov]').forEach((b) => b.addEventListener('click', async () => {
     const provider = b.dataset.prov;
-    const model = provider === 'none' ? '' : (CLOUD_MODELS[provider]?.[0] || '');
+    const model = CLOUD_MODELS[provider]?.[0] || '';
     await saveSettings({ cloud: { provider, model } });
     ctx.rerender();
-    if (provider !== 'none') setTimeout(() => root.querySelector('#cloud-key')?.focus({ preventScroll: true }), 60);
+    setTimeout(() => root.querySelector('#cloud-key')?.focus({ preventScroll: true }), 60);
   }));
 
   acts(root, {
