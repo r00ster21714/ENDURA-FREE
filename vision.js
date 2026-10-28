@@ -160,7 +160,7 @@ Portion (this is the part photos get wrong, so be disciplined):
 
 Numbers:
 - Per item: kcal, protein, carbs, fat for that portion. Keep them consistent with 4/4/9 kcal per gram.
-- Sanity check: kcal per gram must land between 0.08 (vegetables) and 0.9 (pure fat or oil). If the grams and kcal disagree with that, fix the grams, not the kcal.
+- Sanity check: kcal per gram must land between 0.08 (watery vegetables) and 9 (pure oil). Cooked rice is about 1.3, bread 2.7, a burger 2.5-3, cheese 4, nuts 6. If your grams and kcal disagree with that, fix the grams, not the kcal.
 - Grams rounded to 5, macros to one decimal. No ranges, no words in numeric fields.
 
 Honesty:
@@ -192,11 +192,13 @@ const positive = (v) => {
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 10) / 10 : 0;
 };
 
-/* No portion of real food carries more than ~0.95 kcal per gram (that is almost
-   pure fat or oil). A weight that overshoots is usually still self-consistent,
-   so this only stops the physically impossible ones — the portion discipline in
-   the prompt does the rest. Macros are scaled with it so 4/4/9 stays true. */
-const MAX_KCAL_PER_G = 0.95;
+/* Nothing edible carries more than ~9.5 kcal per gram — that is close to pure
+   oil (9) and a little above dry nuts (6). Real cooked food sits at 1-3.
+   A pair beyond that is a model arithmetic slip, so the calories are trimmed to
+   the ceiling and the macros move with them, keeping 4/4/9 true. Ordinary
+   over-estimates stay untouched: the portion discipline in the prompt is what
+   keeps those honest. */
+const MAX_KCAL_PER_G = 9.5;
 
 export function normalizeCloudResult(raw) {
   const items = Array.isArray(raw?.items) ? raw.items : [];
