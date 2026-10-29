@@ -264,7 +264,11 @@ export async function ensureSession({ force = false } = {}) {
   }
   const stale = !s || force || (s.expires_at && s.expires_at * 1000 - Date.now() < 90000);
   if (stale) {
-    const { data } = await c.auth.refreshSession().catch(() => ({ data: null }));
+    // A refresh on a dead connection must not hang the scan: 8 s is enough for
+    // a token exchange and then the caller can say what is wrong.
+    const slow = new Promise((res) => setTimeout(() => res(null), 8000));
+    const freshen = c.auth.refreshSession().catch(() => ({ data: null }));
+    const { data } = (await Promise.race([freshen, slow])) || {};
     if (data?.session) s = data.session;
   }
   auth.session = s || null;

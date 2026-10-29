@@ -335,9 +335,29 @@ async function geminiOnce(model, key, imagePart, signal) {
    session, so every scan does not pay for a probe that cannot succeed. */
 let proxyState = 'unknown';
 
+/* Provider errors arrive written for developers ("API key not valid", "You
+   exceeded your current quota, see https://…"). The person holding the phone
+   has no key to fix and nothing to paste, so the wording is translated here. */
+function proxyErrorText(status, message) {
+  const m = String(message || '');
+  if (/quota|exceeded|rate.?limit|too many requests|429/i.test(m) || status === 429) {
+    return 'The scanner is at its free limit right now. It clears by itself within a minute — try again shortly.';
+  }
+  if (/api.?key|permission|unauthor|forbidden|401|403|secret/i.test(m)) {
+    return 'The scanner\'s key was rejected on the server. Nothing to do on this phone — try again, and if it keeps happening the project needs its key refreshed.';
+  }
+  if (/overload|unavailable|503|502|deadline|timeout/i.test(m) || status === 502 || status === 503 || status === 504) {
+    return 'The scanner is busy. Give it a moment and try again.';
+  }
+  if (/bad image|too large|payload/i.test(m) || status === 413) {
+    return 'That photo is too large to send. Try again from the gallery.';
+  }
+  return m && m.length < 140 ? m : 'The scan service did not answer. Try again.';
+}
+
 /* One call to the Supabase function. It returns Google's raw text; parsing and
    normalising stay here so the server stays a dumb relay. */
-async function viaProxy(dataUrl, model, proxy) {
+async function viaProxy(dataUrl, model, proxy, retried = false) {
   const url = String(proxy.url).replace(/\/+$/, '') + '/functions/v1/scan';
   // Mobile uploads are slower than desktop: give the proxy function room to
   // finish its own model chain instead of aborting a call that is about to
@@ -356,7 +376,7 @@ async function viaProxy(dataUrl, model, proxy) {
       body: JSON.stringify({ image: dataUrl, prompt: PROMPT + '\n\n' + ASK, model }),
     });
   } catch {
-    const e = new Error('Scan proxy unreachable');
+    const e = new Error('Could not reach the scanner — check the connection');
     e.proxyMiss = true;
     throw e;
   } finally {
@@ -372,9 +392,15 @@ async function viaProxy(dataUrl, model, proxy) {
     e.authExpired = true;
     throw e;
   }
+  // A burst of scans can trip the free per-minute quota. That is a wait, not a
+  // failure, so one automatic retry is worth more than asking the user to tap.
+  if (res.status === 429 && !retried) {
+    await new Promise((r) => setTimeout(r, 2500));
+    return viaProxy(dataUrl, model, proxy, true);
+  }
   const body = await res.json().catch(() => null);
   if (!res.ok || !body || !body.text) {
-    throw new Error((body && body.error) || `Scan proxy ${res.status}`);
+    throw new Error(proxyErrorText(res.status, body && body.error));
   }
   return { result: normalizeCloudResult(extractJson(body.text)), model: body.model || model };
 }
