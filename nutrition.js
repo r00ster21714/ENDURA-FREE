@@ -5,7 +5,7 @@ import {
 import { pageHead, macroCard, dateNav, acts } from './common.js';
 import { searchFoods, FOODS, matchVisual } from './data.js';
 import { classify, cloudAnalyze, mergePreds, imageFeatures, CLOUD_LABELS } from './vision.js';
-import { BRAND_RE, looksBranded, lookupPublished, applyPublished } from './webcheck.js';
+import { looksBranded, lookupPublished, applyPublished } from './webcheck.js';
 import { auth, ensureSession, signOut } from './auth.js';
 
 /* Scan result: one answer, up to three one-tap alternatives, then the picker.
@@ -203,6 +203,10 @@ export function openScanner(ctx) {
         return scannerOn(state.settings.cloud);
       };
 
+      // Every click on Camera/Gallery is a ticket. A slow first read must not
+      // paint over the result of a scan the user started afterwards.
+      let scanTicket = 0;
+
       sheetRoot.querySelectorAll('[data-shot]').forEach((b) => b.addEventListener('click', async () => {
         // No usable credential means no scan at all: say so before the camera
         // opens, so nobody picks a photo that can't be read.
@@ -212,6 +216,8 @@ export function openScanner(ctx) {
         }
         const file = await pickImage(b.dataset.shot === 'camera');
         if (!file) return;
+        const ticket = ++scanTicket;
+        const alive = () => sheetRoot.isConnected && ticket === scanTicket;
         busy(true);
         status('Preparing photo…');
         try {
@@ -240,6 +246,7 @@ export function openScanner(ctx) {
             ]);
             const features = imageFeatures(full.canvas);
             const match = matchVisual(preds, state.learned, features);
+            if (!alive()) return;
             if (!match.candidates.length) {
               showNoMatch(sheetRoot, thumb.dataUrl, match, ctx);
             } else {
@@ -276,21 +283,17 @@ export function openScanner(ctx) {
               if (result.retired && result.model && result.model !== cfg.model) {
                 saveSettings({ cloud: { ...cfg, model: result.model } }).catch(() => {});
               }
-              // A branded item has a real number published somewhere; the
-              // model's memory of it is the weakest part of a scan. Look it up
-              // while the sheet still says "working", then draw one card with
-              // the better figure. A miss costs a couple of seconds and nothing
-              // else, and the estimate is already in hand.
+              // A branded item has a real number published somewhere. The sheet
+              // opens on the photo estimate straight away and the lookup runs
+              // behind it, so nothing waits on the web.
+              if (!alive()) return;
               const proxy = { url: sync.url, key: sync.key, token: auth.session?.access_token || '' };
-              if (looksBranded(result)) {
-                status('Looking up the published number…');
-                await withPublished(result, proxy);
-              }
               showCloudResult(sheetRoot, result, thumb.dataUrl, ctx, { proxy });
               busy(false);
               return;
             } catch (err) {
               busy(false);
+              if (!alive()) return;
               // A dead session is an account problem, not a photo problem: say
               // so plainly instead of showing a guess nobody can trust.
               if (err && err.authExpired) {
@@ -715,30 +718,22 @@ function showCandidates(root, match, photo, ctx) {
 
 /* ---------------- cloud result editor ---------------- */
 
-/* Look every branded item up at once and swap in the published calories. The
-   result object is marked checked so the sheet knows the lookup already ran. */
-async function withPublished(result, proxy) {
-  const idx = [];
-  result.items.forEach((it, i) => {
-    if (BRAND_RE.test(String(it.name || '')) || BRAND_RE.test(String(it.brand || ''))) idx.push(i);
+/* Indices of the rows whose numbers are published somewhere: a brand with a
+   nutrition page. Drinks without a brand get the manual button instead, since
+   a home-made latte has no page to look up. */
+function brandedRows(items) {
+  const out = [];
+  items.forEach((it, i) => {
+    if (looksBranded({ items: [it] })) out.push(i);
   });
-  if (!idx.length) { result.checked = true; return result; }
-  const found = await Promise.all(idx.map((i) =>
-    lookupPublished(result.items[i], proxy, { timeoutMs: 9000 }).catch(() => null)));
-  let hits = 0;
-  idx.forEach((i, k) => {
-    if (!found[k]) return;
-    result.items[i] = applyPublished(result.items[i], found[k]);
-    hits += 1;
-  });
-  result.checked = true;
-  result.webHits = hits;
-  return result;
+  return out;
 }
 
 function showCloudResult(root, result, photo, ctx, opts = {}) {
   const proxy = opts.proxy || null;
   let notice = '';
+  let checking = false;
+  let checked = !!result.checked;
   const draft = result.items.map((it) => ({
     name: it.name,
     grams: it.grams || 0,
@@ -761,8 +756,14 @@ function showCloudResult(root, result, photo, ctx, opts = {}) {
   }, { kcal: 0, protein: 0, carbs: 0, fat: 0 });
 
   const box = root.querySelector('#scan-result');
+  // The lookup outlives the paint that started it, so the card it belongs to
+  // is stamped on the node: a scan that has been replaced by a later one must
+  // not repaint its own numbers over the newer result.
+  box.__enduraWeb = { result };
+  const stillMine = () => box.isConnected && box.__enduraWeb && box.__enduraWeb.result === result;
 
   const paint = () => {
+    if (!stillMine()) return;
     const t = totals();
     box.innerHTML = `
       <div class="row" style="justify-content:space-between;margin-bottom:8px">
@@ -795,8 +796,9 @@ function showCloudResult(root, result, photo, ctx, opts = {}) {
         <span class="mono" style="font-size:13px">${Math.round(t.kcal)} kcal · ${Math.round(t.protein)}P ${Math.round(t.carbs)}C ${Math.round(t.fat)}F</span>
       </div>
       ${result.notes ? `<div class="tiny muted" style="margin-top:6px">${esc(result.notes)}</div>` : ''}
+      ${checking ? `<div class="tiny muted" style="margin-top:6px">Checking the published number…</div>` : ''}
       ${notice ? `<div class="tiny muted" style="margin-top:6px">${esc(notice)}</div>` : ''}
-      ${proxy && !result.checked && (looksBranded(result) || result.items.some((it) => it.isDrink))
+      ${proxy && !checked && !checking && (looksBranded(result) || result.items.some((it) => it.isDrink))
         ? `<button class="btn btn--sm btn--ghost" style="margin-top:8px" data-web>${icon('search')}Check the published number</button>`
         : ''}
       <div class="row" style="gap:8px;margin-top:10px">
@@ -845,34 +847,9 @@ function showCloudResult(root, result, photo, ctx, opts = {}) {
     }));
 
     const webBtn = box.querySelector('[data-web]');
-    if (webBtn) webBtn.addEventListener('click', async () => {
-      webBtn.disabled = true;
-      webBtn.textContent = 'Looking it up…';
-      const found = await Promise.all(result.items.map((it) =>
-        (looksBranded({ items: [it] }) || it.isDrink)
-          ? lookupPublished(it, proxy, { timeoutMs: 11000 }).catch(() => null)
-          : Promise.resolve(null)));
-      let hits = 0;
-      found.forEach((f, i) => {
-        if (!f) return;
-        const merged = applyPublished(result.items[i], f);
-        result.items[i] = merged;
-        const factor = draft[i].base.grams ? draft[i].grams / draft[i].base.grams : 1;
-        draft[i].base = {
-          kcal: merged.kcal, protein: merged.protein, carbs: merged.carbs, fat: merged.fat,
-          grams: merged.grams || draft[i].base.grams,
-        };
-        draft[i].published = merged.published || null;
-        draft[i].grams = Math.round(draft[i].base.grams * factor);
-        draft[i].kcal = draft[i].base.kcal * factor;
-        draft[i].protein = draft[i].base.protein * factor;
-        draft[i].carbs = draft[i].base.carbs * factor;
-        draft[i].fat = draft[i].base.fat * factor;
-        hits += 1;
-      });
-      result.checked = true;
-      notice = hits ? '' : 'Nothing published for that came back — the photo estimate stands.';
-      paint();
+    if (webBtn) webBtn.addEventListener('click', () => {
+      const rows = result.items.map((it, i) => i).filter((i) => looksBranded({ items: [result.items[i]] }) || result.items[i].isDrink);
+      lookup(rows, { auto: false });
     });
 
     box.querySelector('[data-rescan]')?.addEventListener('click', () => {
@@ -897,7 +874,55 @@ function showCloudResult(root, result, photo, ctx, opts = {}) {
     });
   };
 
+  /* One lookup for every row asked about, run against whatever the sheet is
+     showing now. The card is already on screen, so this only ever upgrades a
+     number: no spinner blocks the Add button, and a miss leaves the estimate
+     exactly as it was. */
+  const lookup = async (rows, { auto }) => {
+    if (!proxy || !rows.length) return 0;
+    checking = true;
+    paint();
+    const found = await Promise.all(rows.map((i) =>
+      lookupPublished(result.items[i], proxy, { timeoutMs: auto ? 15000 : 18000 }).catch(() => null)));
+    if (!stillMine()) return 0;
+    let hits = 0;
+    found.forEach((f, k) => {
+      if (!f) return;
+      const i = rows[k];
+      const merged = applyPublished(result.items[i], f);
+      result.items[i] = merged;
+      const factor = draft[i].base.grams ? draft[i].grams / draft[i].base.grams : 1;
+      draft[i].base = {
+        kcal: merged.kcal, protein: merged.protein, carbs: merged.carbs, fat: merged.fat,
+        grams: merged.grams || draft[i].base.grams,
+      };
+      draft[i].published = merged.published || null;
+      draft[i].grams = Math.round(draft[i].base.grams * factor);
+      draft[i].kcal = draft[i].base.kcal * factor;
+      draft[i].protein = draft[i].base.protein * factor;
+      draft[i].carbs = draft[i].base.carbs * factor;
+      draft[i].fat = draft[i].base.fat * factor;
+      hits += 1;
+    });
+    checking = false;
+    // An automatic lookup that found nothing leaves the button in place: a
+    // second run with a fresh search page sometimes lands the number.
+    checked = hits > 0 || !auto;
+    result.checked = checked;
+    result.webHits = hits;
+    notice = hits || auto ? '' : 'No published figure came back — the photo estimate stands.';
+    paint();
+    return hits;
+  };
+
   paint();
+
+  // Branded items are worth a lookup without being asked: the brand is exactly
+  // where the model's memory is weakest and a real number exists.
+  if (proxy && !checked) {
+    const rows = brandedRows(result.items);
+    if (rows.length) lookup(rows, { auto: true });
+  }
 }
 
 /* ---------------- local portion editor ---------------- */

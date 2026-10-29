@@ -124,13 +124,25 @@ const n = (v) => {
   return Number.isFinite(x) && x > 0 ? x : 0;
 };
 
+/* Shorthand the photo pass may use where the nutrition page spells the product
+   out. Only true synonyms belong here — a Diet Coke is a different drink with
+   different calories, so it maps to itself, not to Coca-Cola. */
+function expandNames(name) {
+  return name
+    .replace(/\bdiet coke\b/gi, 'Diet Coke')
+    .replace(/\bcoke zero\b/gi, 'Coke Zero')
+    .replace(/\bcoke\b/gi, 'Coca-Cola')
+    .replace(/\bdr pepper\b/gi, 'Dr Pepper');
+}
+
 /**
  * Look up one item's published calories.
  *
- * Two queries at most, in order of specificity, both inside one deadline: the
- * size-tagged one ("grande", "can") hits the right row of a nutrition table,
- * and the plain one catches everything the size word would only narrow out.
- * A miss on both returns null and the photo estimate stands.
+ * Two searches at most, then the checker reads each result page it got. A page
+ * can come back empty or the checker can miss a number on the first read, so
+ * whichever pages arrived are read a second time while the clock allows — an
+ * empty answer from a lite model is not evidence that the number is missing.
+ * A miss overall returns null and the photo estimate stands.
  *
  * @param {{name:string, grams:number, kcal:number, brand?:string, size?:string, isDrink?:boolean, drink?:object}} item
  * @param {{url:string, key:string, token:string}} proxy
@@ -140,10 +152,10 @@ const n = (v) => {
 export async function lookupPublished(item, proxy, opts = {}) {
   if (!proxy || !proxy.url || !proxy.token) return null;
   const model = opts.model || 'gemini-3.5-flash-lite';
-  const budget = opts.timeoutMs || 11000;
+  const budget = opts.timeoutMs || 15000;
   const deadline = Date.now() + budget;
 
-  const name = String(item.name || '').replace(/\s+/g, ' ').trim();
+  const name = expandNames(String(item.name || '')).replace(/\s+/g, ' ').trim();
   if (!name || name.length < 3) return null;
 
   const brand = String(item.brand || '').trim();
@@ -153,49 +165,73 @@ export async function lookupPublished(item, proxy, opts = {}) {
     ? (ml ? Math.round(ml) + ' ml' : '')
     : (n(item.grams) ? Math.round(n(item.grams)) + ' g' : '');
 
-  // The brand is often already inside the name ("Starbucks caffe latte"), so
-  // only prefix it when the name does not carry it.
+  // The brand is often already inside the name ("Starbucks caffe latte"), and
+  // so is the size ("grande iced latte"), so neither is repeated in the query.
   const alreadyNamed = brand && new RegExp(brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(name);
   const lead = alreadyNamed ? '' : brand;
+  const base = size ? name.replace(new RegExp('\\b' + size + '\\b', 'gi'), '').replace(/\s+/g, ' ').trim() : name;
+
+  // Chain sizes read as names ("grande"), packaging as nouns ("a can"), so the
+  // item is described the way a nutrition page would describe it. Saying
+  // "can size" made the checker demand that literal token and answer nothing.
+  const sizeText = size ? (/^(short|tall|grande|venti)$/.test(size) ? size : 'a ' + size) : '';
+  // A volume in the prompt is double-edged: on a drink it makes a 330 ml can
+  // reject the published 12 fl oz can as "a different portion", and pages
+  // already state their own volume. So drinks are described by their size word
+  // and the plausibility and ratio gates judge the number; food keeps its
+  // weight, which matches how a nutrition page states a portion.
+  const volumeText = !(item.isDrink || item.drink) && portion ? 'about ' + portion : '';
+  const described = [name + (brand && !alreadyNamed ? ' (' + brand + ')' : ''), sizeText || 'one serving', volumeText]
+    .filter(Boolean).join(', ');
 
   const queries = [];
-  if (size) queries.push([lead, size, name, 'calories nutrition'].filter(Boolean).join(' '));
-  queries.push([lead, name, 'calories'].filter(Boolean).join(' '));
+  if (size) queries.push([lead, size, base, 'calories nutrition'].filter(Boolean).join(' '));
+  queries.push([lead, base, 'calories'].filter(Boolean).join(' '));
+  if (!size) queries.push([lead, base, 'nutrition facts'].filter(Boolean).join(' '));
 
-  for (let i = 0; i < queries.length; i++) {
+  // Fetch first, read second: the reader is the slow part, so both pages are
+  // requested while the model is idle, and then read in turn.
+  const pages = [];
+  for (const query of queries) {
     const left = deadline - Date.now();
-    if (left < 3800) break;
-
-    const page = await readerText(SEARCH + encodeURIComponent(queries[i]) + '&kl=us-en',
-      Math.min(6000, Math.max(2500, left - 3800)));
+    if (left < 5000) break;
+    const page = await readerText(SEARCH + encodeURIComponent(query) + '&kl=us-en',
+      Math.min(6000, Math.max(2500, left - 4000)));
     const digest = compact(page);
-    if (!digest || digest.length < 120) continue;
+    if (digest && digest.length >= 120 && !pages.some((p) => p.digest === digest)) {
+      pages.push({ query, digest });
+    }
+  }
+  if (!pages.length) return null;
 
-    const remain = Math.max(2200, deadline - Date.now());
-    const prompt = [
-      'You are checking one nutrition figure against search results.',
-      'The attached image is a 1x1 placeholder. Ignore it completely.',
-      '',
-      'Item: ' + name + (brand && !alreadyNamed ? ' (' + brand + ')' : '') +
-        (size ? ', ' + size + ' size' : '') + (portion ? ', about ' + portion : '') + '.',
-      '',
-      'The text below is a web search result page. Find a calorie number that is literally written there for THIS item at THIS size.',
-      '- Ignore the "2,000 calories a day" boilerplate, per-100 g/ml figures, other sizes and other products.',
-      '- Prefer the brand\'s own site when it is present.',
-      '- A figure for a different size is not a match, but the same size in another unit is ("16 fl oz" is a grande, "330 ml" is one can).',
-      '- If no sentence states a figure for this exact item and size, answer found=false. Do not estimate.',
-      '',
-      'JSON only: {"found":false,"kcal":0,"size":"","source":"","quote":""}',
-      'size is the portion the figure belongs to, copied from the sentence (e.g. "grande", "1 can"). source is the bare domain. quote is the sentence you took the number from.',
-      '',
-      'SEARCH RESULTS:',
-      digest,
-    ].join('\n');
+  const promptFor = (digest) => [
+    'You are checking one nutrition figure against search results.',
+    'The attached image is a 1x1 placeholder. Ignore it completely.',
+    '',
+    'Item: ' + described + '.',
+    '',
+    'The text below is a web search result page. Find a calorie number that is literally written there for THIS item at THIS portion.',
+    '- Ignore the "2,000 calories a day" boilerplate, per-100 g/ml figures, other products, and clearly different portions (a 2 litre bottle, a small vs large cup).',
+    '- Prefer the brand site when it is present.',
+    '- The same portion in another unit is still a match: 16 fl oz is a grande, 330 ml is one can.',
+    '- The results may spell the product slightly differently; a sentence about this same product still counts.',
+    '- If no sentence states a figure for this item at this portion, answer found=false. Do not estimate.',
+    '',
+    'JSON only: {"found":false,"kcal":0,"size":"","source":"","quote":""}',
+    'size is the portion the figure belongs to, copied from the sentence (e.g. "grande", "1 can"). source is the bare domain. quote is the sentence you took the number from.',
+    '',
+    'SEARCH RESULTS:',
+    digest,
+  ].join('\n');
 
-    const raw = await askJson(prompt, proxy, model, remain);
-    if (typeof opts.onTrace === 'function') opts.onTrace({ query: queries[i], digest: digest.length, text: digest, raw });
-    const found = accept(raw, item, size, ml);
-    if (found) return found;
+  for (let pass = 0; pass < 2; pass++) {
+    for (const page of pages) {
+      const remain = deadline - Date.now();
+      if (remain < 2500) return null;
+      const raw = await askJson(promptFor(page.digest), proxy, model, Math.min(8000, remain));
+      const found = accept(raw, item, size, ml);
+      if (found) return found;
+    }
   }
 
   return null;
@@ -241,10 +277,13 @@ function accept(raw, item, sizeWord, ml) {
    sentence. */
 const SIZE_ML = { short: 236, small: 300, tall: 355, medium: 400, grande: 473, large: 600, venti: 591 };
 
+const hasWord = (text, word) =>
+  new RegExp('\\b' + word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + 's?\\b', 'i').test(text);
+
 function sizeMatches(said, quote, sizeWord, portion) {
   if (!sizeWord) return true;
   const hay = (said + ' ' + quote).toLowerCase();
-  if (hay.includes(sizeWord)) return true;
+  if (hasWord(hay, sizeWord)) return true;
   const want = n(portion) || SIZE_ML[sizeWord] || 0;
   if (!want) return false;
   const oz = /(\d+(?:\.\d+)?)\s*(?:fl\.?\s*)?oz\b/.exec(hay);
