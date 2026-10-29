@@ -187,7 +187,7 @@ export const DEFAULT_SETTINGS = {
   // the `scan` Edge Function, so a fresh install scans immediately and the key
   // is never part of this bundle. A device that pastes its own key uses that
   // instead, straight to Google.
-  cloud: { provider: 'gemini', model: 'gemini-3.5-flash-lite', key: '' },
+  cloud: { provider: 'gemini', model: 'gemini-3.5-flash', key: '' },
   sync: {
     url: 'https://npeinkgyioxlgotmwqea.supabase.co',
     key: 'sb_publishable_vvsQjcOBHNjhtwIopVJK-w_zbunWTCA',
@@ -235,6 +235,14 @@ export async function boot() {
   if (local && !settings) {
     try { state.settings = mergeSettings(DEFAULT_SETTINGS, JSON.parse(local)); } catch { /* ignore */ }
   }
+  // Lite used to be the shipped default. It names a dish reliably but is loose
+  // on calories, so a device still sitting on that value moves to the stronger
+  // model once. Boot-only on purpose: a model adopted after a fallback (the
+  // scanner records which one actually answered) is allowed to stick.
+  if (state.settings.cloud.provider === 'gemini'
+      && state.settings.cloud.model === 'gemini-3.5-flash-lite') {
+    state.settings.cloud.model = DEFAULT_SETTINGS.cloud.model;
+  }
   state.ready = true;
 }
 
@@ -254,6 +262,7 @@ function mergeSettings(base, patch) {
   // clearing the field (or an install that predates it) never leaves the
   // scanner switched off. Anthropic and OpenAI still need a key of their own.
   if (out.cloud.provider === 'gemini' && !out.cloud.key) out.cloud.key = base.cloud.key;
+  if (out.cloud.provider === 'gemini' && !out.cloud.model) out.cloud.model = base.cloud.model;
   // A saved blank must not erase the built-in server: an install that predates
   // the baked-in config would otherwise be left with no accounts at all.
   if (!out.sync.url || !out.sync.key) out.sync = { ...base.sync, ...(out.sync.url ? { url: out.sync.url } : {}), ...(out.sync.key ? { key: out.sync.key } : {}) };

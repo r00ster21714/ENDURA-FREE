@@ -146,6 +146,7 @@ Identifying:
 - Name each distinct food the way a person would say it: "grilled chicken thigh", "jasmine rice", "garlic naan", "cheeseburger", "blueberry muffin". Never answer with a category like "meat", "pastry" or "food".
 - List every component that carries calories: mains, sides, sauces, dressings, drinks, the oil something was fried in.
 - Use visible text, packaging, logos and restaurant context when they are legible.
+- A branded item with published nutrition — a chain menu drink or sandwich, a packet whose label is readable — uses the published numbers for the size in the frame. That beats estimating.
 - A mixed plate is several items, not one item called "meal".
 
 Portion (this is the part photos get wrong, so be disciplined):
@@ -158,10 +159,22 @@ Portion (this is the part photos get wrong, so be disciplined):
 - Count the fat you can see: a sheen is 3-5 g of oil, not a tablespoon. Visible sauces and dressings count.
 - If the plate is only partly full, weigh what is there, not a full serving.
 
+Drinks (a drink is a size and a milk, so settle those two before anything else):
+- Size the cup from the cup, not from habit: small/tall 355 ml, medium/grande 473 ml, large/venti 591 ml hot, iced venti 710 ml, can 330 ml, bottle 500 ml, home mug 350 ml. With no cue at all use 355 ml. Tall, grande and venti mean exactly those numbers.
+- Black coffee, espresso, americano, plain tea: 2-5 kcal. The water is free.
+- Milk carries the calories, per 100 ml: whole 61, 2% 50, skim 34, oat 45, soy 45, almond 15. A latte or flat white is nearly all milk (grande ≈ 400 ml of milk). A cappuccino is about one third milk and two thirds foam — grande ≈ 140 kcal, not 190. A macchiato is a latte with a shot poured on top. Mocha adds chocolate sauce (about 100 kcal at grande).
+- Syrup is 20 kcal a pump, 2-3 pumps in a flavoured latte or frappuccino. A frappuccino base and blended ice put about 10% on top of milk and syrup. Whipped cream is 80 kcal a swirl and only counts when it stands above the lid.
+- Ice displaces milk: the same cup size iced holds 20-30% less milk than hot, so a grande iced latte is about 130 kcal, not 190.
+- Assume 2% milk unless the drink is visibly black (then skim) or the packaging names the milk, and say which you assumed in notes.
+- Chain menu drinks: name them as the menu does ("Starbucks grande iced latte", "McDonald's medium Coke") and use that chain's published number for that exact size when you are sure of both: grande latte 190, grande cappuccino 140, grande iced latte 130, grande caramel macchiato 250, grande caramel frappuccino 380, grande chai latte 240, medium Coke 210. If the size is not legible, take the middle size of that chain, never the largest.
+- An opened bottle next to a glass is the glass, about 250 ml. A can or bottle still sealed is the whole thing.
+
 Numbers:
 - Per item: kcal, protein, carbs, fat for that portion. Keep them consistent with 4/4/9 kcal per gram.
 - Sanity check: kcal per gram must land between 0.08 (watery vegetables) and 9 (pure oil). Cooked rice is about 1.3, bread 2.7, a burger 2.5-3, cheese 4, nuts 6. If your grams and kcal disagree with that, fix the grams, not the kcal.
-- Grams rounded to 5, macros to one decimal. No ranges, no words in numeric fields.
+- Check the arithmetic before answering: kcal should equal 4×protein + 4×carbs + 9×fat to within about 10%. If it does not, the macros or the calories are wrong — correct them rather than sending both.
+- Drinks run the same check: 0-1 kcal per ml (black coffee 0.02, soda 0.42, a frappuccino about 0.6). Above 1 kcal/ml is cream, not a drink.
+- Food weights in grams rounded to 5, macros to one decimal. For a drink put its volume in millilitres in "grams" (a millilitre of drink weighs about a gram), rounded to 10. No ranges, no words in numeric fields.
 
 Honesty:
 - If two dishes are plausible, name the likelier one, set confidence "low", and say what the other was in notes.
@@ -171,7 +184,7 @@ Honesty:
 Answer with JSON only, no markdown fence, exactly:
 {"items":[{"name":"","grams":0,"kcal":0,"protein":0,"carbs":0,"fat":0}],"confidence":"low|medium|high","notes":""}`;
 
-const ASK = 'Estimate this meal. One item per food visible.';
+const ASK = 'Estimate this photo. One item per food or drink visible. For a drink, put the cup volume in millilitres in "grams".';
 
 function extractJson(text) {
   if (!text) throw new Error('Empty response from model');
@@ -253,10 +266,12 @@ async function apiFetch(url, opts) {
 }
 
 export const CLOUD_MODELS = {
-  // Newest first. Google retires names for new keys (2.5-flash already is), so
-  // this list is also the fallback chain: a busy or retired model moves to the
-  // next one instead of failing the scan.
-  gemini: ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'],
+  // Best answer first: the full flash reads portions and beverage composition
+  // noticeably better than lite, which is kept second as the fast fallback. The
+  // list is also the fallback chain — Google retires names for new keys
+  // (2.5-flash already is), so a busy or retired model moves to the next one
+  // instead of failing the scan.
+  gemini: ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-2.5-flash'],
   anthropic: ['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-3-5-haiku-latest'],
   openai: ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini'],
 };
