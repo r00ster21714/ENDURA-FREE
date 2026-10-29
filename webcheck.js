@@ -46,21 +46,33 @@ export function looksBranded(result) {
   return result.items.some((it) => BRAND_RE.test(String(it.name || '')) || BRAND_RE.test(String(it.brand || '')));
 }
 
-/* Strip a result page down to the lines that can carry a number. Link blocks
-   and image lines are most of the bytes and none of the content. */
+/* Strip a result page down to the lines that can carry a number.
+   DuckDuckGo wraps every snippet in a redirect link, so the useful text and the
+   attribution both live inside markdown. Unwrapping keeps the sentence and
+   turns the target into "(domain)" — which is what the source line shows. */
 function compact(text) {
   const keep = [];
   for (const raw of String(text || '').split('\n')) {
-    const line = raw.trim();
+    let line = raw.trim();
     if (!line || line.length < 12) continue;
-    if (line.startsWith('[![') || line.startsWith('![')) continue;
-    if (/^\[.*\]\(https:\/\/duckduckgo\.com\/l\//.test(line)) continue;
-    if (/utm_source|external-content\.duckduckgo/.test(line)) continue;
+    line = line.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ');
+    line = line.replace(/\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, (m, label, href) => {
+      let host = '';
+      try {
+        const u = new URL(href);
+        const target = u.searchParams.get('uddg');
+        host = new URL(target || u.href).hostname.replace(/^www\./, '');
+      } catch { /* keep the label alone */ }
+      const clean = label.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim();
+      return host ? clean + ' (' + host + ')' : clean;
+    });
+    line = line.replace(/\*\*|__/g, '').replace(/\s+/g, ' ').trim();
+    if (line.length < 12) continue;
     if (!/\d|calorie|kcal|nutrition/i.test(line)) continue;
-    keep.push(line.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\*\*/g, ''));
-    if (keep.join('\n').length > 5200) break;
+    keep.push(line);
+    if (keep.length > 70) break;
   }
-  return keep.join('\n');
+  return keep.join('\n').slice(0, 6500);
 }
 
 async function readerText(url, ms) {
