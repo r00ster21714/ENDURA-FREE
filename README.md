@@ -111,7 +111,23 @@ before logging. The result is labelled with the model that produced it.
 - A physically impossible portion is corrected in code too: no item can exceed 9.5 kcal/g (pure
   oil), so a model arithmetic slip cannot log a four-digit snack; macros are scaled with it.
   Ordinary over-estimates are left alone — the weighing discipline in the prompt handles those.
-- Model names are editable, so a newer model can be typed in without a new build.
+- **Drinks are sized, not guessed.** A drink goes wrong differently from food: the cup size is the
+  portion and the milk is the calories. The prompt now fixes both before anything else — tall 355 ml,
+  grande 473 ml, hot venti 591 ml, iced venti 710 ml, can 330 ml, bottle 500 ml, mug 350 ml — and then
+  builds the drink from per-100 ml milk values (whole 61, 2% 50, skim 34, oat 45, soy 45, almond 15),
+  a 20 kcal pump of syrup, 80 kcal of visible whip and the frappuccino base. It knows a cappuccino is
+  about a third milk (grande ≈ 140 kcal) while a latte is nearly all milk (grande ≈ 190), and that ice
+  displaces milk, so the iced grande latte is ≈ 130. Chain drinks use the chain's published number for
+  the size in frame, and a size that cannot be read takes that chain's middle size, never the largest.
+  A drink is stored in millilitres (1 ml ≈ 1 g), so the portion in the sheet is the cup.
+- **The arithmetic has to close.** Every answer is checked against 4/4/9 kcal per gram before it is
+  sent, and a drink against 0-1 kcal per ml; a mismatch is corrected rather than reported. Verified on
+  a Starbucks grande latte (190), a grande iced latte (150), a caramel iced latte with whip (280) and
+  a 250 ml Coke can read off its own label (113).
+- **The default model is now `gemini-3.5-flash`**, with `gemini-3.5-flash-lite` kept as the fast
+  fallback — lite names a dish reliably but was the source of the loose calorie answers. A device still
+  holding the old shipped default is moved over once at boot; a model you typed yourself is left alone.
+  Model names are editable, so a newer model can be typed in without a new build.
 - **The session heals itself before a scan.** The token is checked and refreshed first (a phone that
   slept can wake with an expired one), and a 401 gets one silent refresh and retry. If the session is
   genuinely gone the sheet says *"Sign in again to scan"* with a button — it never asks for an API key,
