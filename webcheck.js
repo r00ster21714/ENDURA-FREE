@@ -229,9 +229,8 @@ function accept(raw, item, sizeWord, ml) {
   const est = n(item.kcal);
   if (est && (kcal / est > 3 || est / kcal > 3)) return null;
 
-  const quote = String(raw.quote || '').replace(/\s+/g, ' ').slice(0, 180);
   const source = String(raw.source || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').slice(0, 60);
-  return { kcal, size: said, source, quote };
+  return { kcal, size: said, source, quote: quote.slice(0, 180) };
 }
 
 /* A figure belongs to the portion asked about. The vision pass names sizes in
