@@ -182,7 +182,8 @@ Honesty:
 - Never invent a side dish that is not visible.
 
 Answer with JSON only, no markdown fence, exactly:
-{"items":[{"name":"","grams":0,"kcal":0,"protein":0,"carbs":0,"fat":0}],"confidence":"low|medium|high","notes":""}`;
+{"items":[{"name":"","brand":"","size":"","grams":0,"kcal":0,"protein":0,"carbs":0,"fat":0}],"confidence":"low|medium|high","notes":""}
+"brand" is the brand on the packaging, cup or menu, or "" when none is visible. "size" is the portion word for that item when it has one — "tall", "grande", "venti", "small", "medium", "large", "slice", "can", "bottle" — otherwise "".`;
 
 const ASK = 'Estimate this photo. One item per food or drink visible. For a drink, put the cup volume in millilitres in "grams".';
 
@@ -213,12 +214,20 @@ const positive = (v) => {
    keeps those honest. */
 const MAX_KCAL_PER_G = 9.5;
 
+/* A drink is priced per millilitre, not per gram of food, so the row needs to
+   know which it is: the lookup asks for a cup size, and the plausibility gate
+   in webcheck.js uses a different ceiling for liquids. */
+const DRINK_RE = /\b(latte|cappuccino|flat white|macchiato|mocha|frappuccino|frappe|coffee|espresso|americano|tea|chai|matcha|hot chocolate|soda|cola|coke|pepsi|lemonade|juice|smoothie|shake|beer|lager|ale|cider|wine|prosecco|whisky|vodka|gin|rum|energy drink|water|milk)\b/i;
+
 export function normalizeCloudResult(raw) {
   const items = Array.isArray(raw?.items) ? raw.items : [];
   const cleaned = items
     .filter((it) => it && (it.name || it.kcal))
     .map((it) => ({
       name: String(it.name || 'Food').slice(0, 60).replace(/^([a-z])/, (c) => c.toUpperCase()),
+      brand: String(it.brand || '').slice(0, 40),
+      size: String(it.size || '').slice(0, 16),
+      isDrink: DRINK_RE.test(String(it.name || '')),
       grams: Math.round(positive(it.grams)) || 0,
       kcal: positive(it.kcal),
       protein: positive(it.protein),

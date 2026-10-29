@@ -5,6 +5,7 @@ import {
 import { pageHead, macroCard, dateNav, acts } from './common.js';
 import { searchFoods, FOODS, matchVisual } from './data.js';
 import { classify, cloudAnalyze, mergePreds, imageFeatures, CLOUD_LABELS } from './vision.js';
+import { BRAND_RE, looksBranded, lookupPublished, applyPublished } from './webcheck.js';
 import { auth, ensureSession, signOut } from './auth.js';
 
 /* Scan result: one answer, up to three one-tap alternatives, then the picker.
@@ -275,7 +276,17 @@ export function openScanner(ctx) {
               if (result.retired && result.model && result.model !== cfg.model) {
                 saveSettings({ cloud: { ...cfg, model: result.model } }).catch(() => {});
               }
-              showCloudResult(sheetRoot, result, thumb.dataUrl, ctx);
+              // A branded item has a real number published somewhere; the
+              // model's memory of it is the weakest part of a scan. Look it up
+              // while the sheet still says "working", then draw one card with
+              // the better figure. A miss costs a couple of seconds and nothing
+              // else, and the estimate is already in hand.
+              const proxy = { url: sync.url, key: sync.key, token: auth.session?.access_token || '' };
+              if (looksBranded(result)) {
+                status('Looking up the published number…');
+                await withPublished(result, proxy);
+              }
+              showCloudResult(sheetRoot, result, thumb.dataUrl, ctx, { proxy });
               busy(false);
               return;
             } catch (err) {
@@ -704,10 +715,34 @@ function showCandidates(root, match, photo, ctx) {
 
 /* ---------------- cloud result editor ---------------- */
 
-function showCloudResult(root, result, photo, ctx) {
+/* Look every branded item up at once and swap in the published calories. The
+   result object is marked checked so the sheet knows the lookup already ran. */
+async function withPublished(result, proxy) {
+  const idx = [];
+  result.items.forEach((it, i) => {
+    if (BRAND_RE.test(String(it.name || '')) || BRAND_RE.test(String(it.brand || ''))) idx.push(i);
+  });
+  if (!idx.length) { result.checked = true; return result; }
+  const found = await Promise.all(idx.map((i) =>
+    lookupPublished(result.items[i], proxy, { timeoutMs: 9000 }).catch(() => null)));
+  let hits = 0;
+  idx.forEach((i, k) => {
+    if (!found[k]) return;
+    result.items[i] = applyPublished(result.items[i], found[k]);
+    hits += 1;
+  });
+  result.checked = true;
+  result.webHits = hits;
+  return result;
+}
+
+function showCloudResult(root, result, photo, ctx, opts = {}) {
+  const proxy = opts.proxy || null;
+  let notice = '';
   const draft = result.items.map((it) => ({
     name: it.name,
     grams: it.grams || 0,
+    published: it.published || null,
     base: { kcal: it.kcal, protein: it.protein, carbs: it.carbs, fat: it.fat, grams: it.grams || 0 },
   }));
   const scaleDraft = (factor) => {
@@ -747,6 +782,7 @@ function showCloudResult(root, result, photo, ctx) {
               <label class="field"><span class="field__l">fat g</span><input class="input input--num" inputmode="decimal" data-f="fat" data-i="${i}" value="${round1(d.fat)}"></label>
               <label class="field"><span class="field__l">grams</span><input class="input input--num" inputmode="decimal" data-f="grams" data-i="${i}" value="${d.grams}"></label>
             </div>
+            ${d.published ? `<div class="tiny" style="margin-top:6px;line-height:1.4;color:var(--accent)">Published figure${d.published.source ? ' from ' + esc(d.published.source) : ''}${d.published.quote ? ' — “' + esc(d.published.quote) + '”' : ''}</div>` : ''}
           </div>`).join('')}
       </div>
 
@@ -759,6 +795,10 @@ function showCloudResult(root, result, photo, ctx) {
         <span class="mono" style="font-size:13px">${Math.round(t.kcal)} kcal · ${Math.round(t.protein)}P ${Math.round(t.carbs)}C ${Math.round(t.fat)}F</span>
       </div>
       ${result.notes ? `<div class="tiny muted" style="margin-top:6px">${esc(result.notes)}</div>` : ''}
+      ${notice ? `<div class="tiny muted" style="margin-top:6px">${esc(notice)}</div>` : ''}
+      ${proxy && !result.checked && (looksBranded(result) || result.items.some((it) => it.isDrink))
+        ? `<button class="btn btn--sm btn--ghost" style="margin-top:8px" data-web>${icon('search')}Check the published number</button>`
+        : ''}
       <div class="row" style="gap:8px;margin-top:10px">
         <button class="btn btn--primary grow" data-add>Add ${Math.round(t.kcal)} kcal to log</button>
         <button class="btn btn--ghost" data-rescan aria-label="Scan another photo">${icon('camera')}</button>
@@ -803,6 +843,37 @@ function showCloudResult(root, result, photo, ctx) {
       });
       paint();
     }));
+
+    const webBtn = box.querySelector('[data-web]');
+    if (webBtn) webBtn.addEventListener('click', async () => {
+      webBtn.disabled = true;
+      webBtn.textContent = 'Looking it up…';
+      const found = await Promise.all(result.items.map((it) =>
+        (looksBranded({ items: [it] }) || it.isDrink)
+          ? lookupPublished(it, proxy, { timeoutMs: 11000 }).catch(() => null)
+          : Promise.resolve(null)));
+      let hits = 0;
+      found.forEach((f, i) => {
+        if (!f) return;
+        const merged = applyPublished(result.items[i], f);
+        result.items[i] = merged;
+        const factor = draft[i].base.grams ? draft[i].grams / draft[i].base.grams : 1;
+        draft[i].base = {
+          kcal: merged.kcal, protein: merged.protein, carbs: merged.carbs, fat: merged.fat,
+          grams: merged.grams || draft[i].base.grams,
+        };
+        draft[i].published = merged.published || null;
+        draft[i].grams = Math.round(draft[i].base.grams * factor);
+        draft[i].kcal = draft[i].base.kcal * factor;
+        draft[i].protein = draft[i].base.protein * factor;
+        draft[i].carbs = draft[i].base.carbs * factor;
+        draft[i].fat = draft[i].base.fat * factor;
+        hits += 1;
+      });
+      result.checked = true;
+      notice = hits ? '' : 'Nothing published for that came back — the photo estimate stands.';
+      paint();
+    });
 
     box.querySelector('[data-rescan]')?.addEventListener('click', () => {
       closeSheet();
