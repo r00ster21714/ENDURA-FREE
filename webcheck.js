@@ -192,7 +192,9 @@ export async function lookupPublished(item, proxy, opts = {}) {
       digest,
     ].join('\n');
 
-    const found = accept(await askJson(prompt, proxy, model, remain), item, size, ml);
+    const raw = await askJson(prompt, proxy, model, remain);
+    if (typeof opts.onTrace === 'function') opts.onTrace({ query: queries[i], digest: digest.length, raw });
+    const found = accept(raw, item, size, ml);
     if (found) return found;
   }
 
