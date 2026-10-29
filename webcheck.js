@@ -25,17 +25,17 @@ const SEARCH = 'https://html.duckduckgo.com/html/?q=';
    only, so the model is told plainly to ignore it. */
 const PIXEL = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
 
-/* Cup size in the words the chains use, so the search hits the right row of
-   their nutrition table instead of the middle one. */
-const SIZE_WORD = (ml) => {
-  const n = Number(ml) || 0;
-  if (!n) return '';
-  if (n <= 300) return 'small';
-  if (n <= 415) return 'tall';
-  if (n <= 520) return 'grande';
-  if (n <= 660) return 'venti';
-  return 'large';
-};
+/* Size words a photo can actually carry. Anything else is the model guessing,
+   and a guessed size sends the search to the wrong row of a nutrition table
+   ("tall" for a 330 ml can), so unknown words are dropped rather than passed
+   on. The vision prompt already asks for one of these. */
+const SIZE_WORDS = /^(short|small|tall|medium|grande|venti|large|kids|regular|can|bottle|cup|glass|slice|pint|single|double|mini|half|whole)$/;
+
+function cleanSize(value) {
+  const s = String(value || '').toLowerCase().replace(/[^a-z ]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!s || s.length > 18) return '';
+  return s.split(' ').filter((w) => SIZE_WORDS.test(w)).join(' ');
+}
 
 /* Brands whose numbers are actually published. A photo of a home-made sandwich
    has nothing to look up, so the lookup stays off there. */
@@ -127,7 +127,12 @@ const n = (v) => {
 /**
  * Look up one item's published calories.
  *
- * @param {{name:string, grams:number, kcal:number, brand?:string, drink?:object}} item
+ * Two queries at most, in order of specificity, both inside one deadline: the
+ * size-tagged one ("grande", "can") hits the right row of a nutrition table,
+ * and the plain one catches everything the size word would only narrow out.
+ * A miss on both returns null and the photo estimate stands.
+ *
+ * @param {{name:string, grams:number, kcal:number, brand?:string, size?:string, isDrink?:boolean, drink?:object}} item
  * @param {{url:string, key:string, token:string}} proxy
  * @param {{model?:string, timeoutMs?:number}} [opts]
  * @returns {Promise<null|{kcal:number, size:string, source:string, quote:string}>}
@@ -138,53 +143,77 @@ export async function lookupPublished(item, proxy, opts = {}) {
   const budget = opts.timeoutMs || 11000;
   const deadline = Date.now() + budget;
 
-  const name = String(item.name || '').trim();
+  const name = String(item.name || '').replace(/\s+/g, ' ').trim();
   if (!name || name.length < 3) return null;
 
-  const ml = n(item.drink && item.drink.ml) || (item.isDrink ? n(item.grams) : 0);
-  const sizeWord = String(item.size || '').toLowerCase() || SIZE_WORD(ml);
   const brand = String(item.brand || '').trim();
+  const size = cleanSize(item.size);
+  const ml = n(item.drink && item.drink.ml) || (item.isDrink ? n(item.grams) : 0);
+  const portion = item.isDrink || item.drink
+    ? (ml ? Math.round(ml) + ' ml' : '')
+    : (n(item.grams) ? Math.round(n(item.grams)) + ' g' : '');
+
   // The brand is often already inside the name ("Starbucks caffe latte"), so
   // only prefix it when the name does not carry it.
-  const query = [brand && !new RegExp(brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(name) ? brand : '',
-    sizeWord, name, 'calories nutrition'].filter(Boolean).join(' ');
+  const alreadyNamed = brand && new RegExp(brand.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(name);
+  const lead = alreadyNamed ? '' : brand;
 
-  const page = await readerText(SEARCH + encodeURIComponent(query), Math.min(6500, budget));
-  const digest = compact(page);
-  if (!digest || digest.length < 120) return null;
+  const queries = [];
+  if (size) queries.push([lead, size, name, 'calories nutrition'].filter(Boolean).join(' '));
+  queries.push([lead, name, 'calories'].filter(Boolean).join(' '));
 
-  const remain = Math.max(3500, deadline - Date.now());
-  const prompt = [
-    'You are checking one nutrition figure against search results.',
-    'The attached image is a 1x1 placeholder. Ignore it completely.',
-    '',
-    'Item: ' + name + (sizeWord ? ' — ' + sizeWord + ' size' : '') + '.',
-    '',
-    'The text below is a web search result page. Find a calorie number that is literally written there for THIS item at THIS size.',
-    '- Ignore the "2,000 calories a day" boilerplate, other sizes and other products.',
-    '- Prefer the brand\'s own site when it is present.',
-    '- If no sentence states a figure for this exact item and size, answer found=false. Do not estimate.',
-    '',
-    'JSON only: {"found":false,"kcal":0,"size":"","source":"","quote":""}',
-    'source is the bare domain, e.g. "starbucks.com". quote is the sentence you took the number from.',
-    '',
-    'SEARCH RESULTS:',
-    digest,
-  ].join('\n');
+  for (let i = 0; i < queries.length; i++) {
+    const left = deadline - Date.now();
+    if (left < 3800) break;
 
-  const raw = await askJson(prompt, proxy, model, remain);
+    const page = await readerText(SEARCH + encodeURIComponent(queries[i]) + '&kl=us-en',
+      Math.min(6000, Math.max(2500, left - 3800)));
+    const digest = compact(page);
+    if (!digest || digest.length < 120) continue;
+
+    const remain = Math.max(2200, deadline - Date.now());
+    const prompt = [
+      'You are checking one nutrition figure against search results.',
+      'The attached image is a 1x1 placeholder. Ignore it completely.',
+      '',
+      'Item: ' + name + (brand ? ' (' + brand + ')' : '') +
+        (size ? ', ' + size + ' size' : '') + (portion ? ', about ' + portion : '') + '.',
+      '',
+      'The text below is a web search result page. Find a calorie number that is literally written there for THIS item at THIS size.',
+      '- Ignore the "2,000 calories a day" boilerplate, per-100 g/ml figures, other sizes and other products.',
+      '- Prefer the brand\'s own site when it is present.',
+      '- If a sentence states a different size than the one asked for, that is not a match.',
+      '- If no sentence states a figure for this exact item and size, answer found=false. Do not estimate.',
+      '',
+      'JSON only: {"found":false,"kcal":0,"size":"","source":"","quote":""}',
+      'size is the portion the figure belongs to, copied from the sentence (e.g. "grande", "1 can"). source is the bare domain. quote is the sentence you took the number from.',
+      '',
+      'SEARCH RESULTS:',
+      digest,
+    ].join('\n');
+
+    const found = accept(await askJson(prompt, proxy, model, remain), item, size, ml);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+/* A number is only an answer when it is the right item at the right size and
+   physically possible for the portion in the photo. Everything else is noise
+   from a search page: another product, another cup, a per-100 ml column. */
+function accept(raw, item, sizeWord, ml) {
   if (!raw || raw.found !== true) return null;
-
   const kcal = n(raw.kcal);
   if (!kcal) return null;
 
   // Size discipline: a figure for a different cup is not an answer.
-  const said = String(raw.size || '').toLowerCase();
+  const said = String(raw.size || '').toLowerCase().replace(/\s+/g, ' ').trim();
   if (sizeWord && said && !said.includes(sizeWord) && !sizeWord.includes(said)) return null;
 
   // Plausibility. A drink cannot be denser than cream, and no single item is
   // thousands of calories.
-  const grams = n(item.grams);
+  const grams = n(item.grams) || (item.isDrink ? ml : 0);
   if (grams) {
     const perG = kcal / grams;
     const drink = !!(item.drink || item.isDrink);
