@@ -176,13 +176,13 @@ export async function lookupPublished(item, proxy, opts = {}) {
       'You are checking one nutrition figure against search results.',
       'The attached image is a 1x1 placeholder. Ignore it completely.',
       '',
-      'Item: ' + name + (brand ? ' (' + brand + ')' : '') +
+      'Item: ' + name + (brand && !alreadyNamed ? ' (' + brand + ')' : '') +
         (size ? ', ' + size + ' size' : '') + (portion ? ', about ' + portion : '') + '.',
       '',
       'The text below is a web search result page. Find a calorie number that is literally written there for THIS item at THIS size.',
       '- Ignore the "2,000 calories a day" boilerplate, per-100 g/ml figures, other sizes and other products.',
       '- Prefer the brand\'s own site when it is present.',
-      '- If a sentence states a different size than the one asked for, that is not a match.',
+      '- A figure for a different size is not a match, but the same size in another unit is ("16 fl oz" is a grande, "330 ml" is one can).',
       '- If no sentence states a figure for this exact item and size, answer found=false. Do not estimate.',
       '',
       'JSON only: {"found":false,"kcal":0,"size":"","source":"","quote":""}',
@@ -193,7 +193,7 @@ export async function lookupPublished(item, proxy, opts = {}) {
     ].join('\n');
 
     const raw = await askJson(prompt, proxy, model, remain);
-    if (typeof opts.onTrace === 'function') opts.onTrace({ query: queries[i], digest: digest.length, raw });
+    if (typeof opts.onTrace === 'function') opts.onTrace({ query: queries[i], digest: digest.length, text: digest, raw });
     const found = accept(raw, item, size, ml);
     if (found) return found;
   }
@@ -209,9 +209,9 @@ function accept(raw, item, sizeWord, ml) {
   const kcal = n(raw.kcal);
   if (!kcal) return null;
 
-  // Size discipline: a figure for a different cup is not an answer.
   const said = String(raw.size || '').toLowerCase().replace(/\s+/g, ' ').trim();
-  if (sizeWord && said && !said.includes(sizeWord) && !sizeWord.includes(said)) return null;
+  const quote = String(raw.quote || '').replace(/\s+/g, ' ').trim();
+  if (!sizeMatches(said, quote, sizeWord, n(item.grams) || ml)) return null;
 
   // Plausibility. A drink cannot be denser than cream, and no single item is
   // thousands of calories.
@@ -232,6 +232,33 @@ function accept(raw, item, sizeWord, ml) {
   const quote = String(raw.quote || '').replace(/\s+/g, ' ').slice(0, 180);
   const source = String(raw.source || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').slice(0, 60);
   return { kcal, size: said, source, quote };
+}
+
+/* A figure belongs to the portion asked about. The vision pass names sizes in
+   chain words ("grande", "can") but a nutrition page states them in volumes
+   ("16 fl oz", "330 ml"), so a volume within a fifth of the portion in the
+   photo counts as the same size. The quote is checked too, because the model
+   often copies the volume into "size" and leaves the chain word in the
+   sentence. */
+const SIZE_ML = { short: 236, small: 300, tall: 355, medium: 400, grande: 473, large: 600, venti: 591 };
+
+function sizeMatches(said, quote, sizeWord, portion) {
+  if (!sizeWord) return true;
+  const hay = (said + ' ' + quote).toLowerCase();
+  if (hay.includes(sizeWord)) return true;
+  const want = n(portion) || SIZE_ML[sizeWord] || 0;
+  if (!want) return false;
+  const oz = /(\d+(?:\.\d+)?)\s*(?:fl\.?\s*)?oz\b/.exec(hay);
+  if (oz) {
+    const ml = Number(oz[1]) * 29.57;
+    if (Math.abs(ml - want) / want <= 0.2) return true;
+  }
+  const ml = /(\d{2,4})\s*ml\b/.exec(hay) || /(\d{2,4})\s*g\b/.exec(hay);
+  if (ml) {
+    const got = Number(ml[1]);
+    if (Math.abs(got - want) / want <= 0.2) return true;
+  }
+  return false;
 }
 
 /**
