@@ -560,6 +560,31 @@ function plateGuess(predictions, fired, plated = false) {
   return null;
 }
 
+/* Clues from drink containers, used only when no food label matched.
+   MobileNet has no "soda can" class; it answers "pop bottle", "cup" or
+   "coffee mug" instead, and those are deliberately ignored while real food is
+   present. Alone they still say more than nothing. */
+const CONTAINER_DRINKS = [
+  { re: /pop bottle|soda|cola|beer can|drinking straw|can/, choices: ['Soda', 'Beer'] },
+  { re: /beer bottle/, choices: ['Beer', 'Soda'] },
+  { re: /water bottle|bottle|carton/, choices: ['Soda', 'Latte'] },
+  { re: /coffee mug|coffee cup|cup|espresso|coffeepot/, choices: ['Coffee (black)', 'Latte'] },
+];
+
+function containerGuess(predictions) {
+  for (const p of predictions) {
+    const label = norm(String(p.label || '').split(',')[0]);
+    if (!label) continue;
+    const hit = CONTAINER_DRINKS.find((c) => c.re.test(label));
+    if (!hit) continue;
+    const base = Math.max(0.2, Number(p.score) || 0.3);
+    return hit.choices
+      .map((name, i) => ({ food: FOODS.find((f) => f.name === name), score: base * (i ? 0.72 : 1) }))
+      .filter((x) => x.food);
+  }
+  return [];
+}
+
 export function matchVisual(predictions, learned = {}, features = null) {
   // Direct hits and shelf guesses are accumulated separately: a family guess
   // must never outrank a real label for the same photo.
@@ -702,6 +727,18 @@ export function matchVisual(predictions, learned = {}, features = null) {
   }
 
   scored.sort((a, b) => b.score - a.score);
+
+  /* A can or a cup is recognised as a container, and containers are filtered
+     out above so they cannot outrank real food. When nothing else matched, the
+     container is still the best clue in the frame: a photo of a soda can should
+     answer "Soda", not "not sure what that is". Low confidence by construction,
+     so the alternatives sit right next to it. */
+  if (!scored.length) {
+    for (const g of containerGuess(predictions)) {
+      scored.push({ food: g.food, score: g.score, why: 'container', famId: null });
+    }
+    scored.sort((a, b) => b.score - a.score);
+  }
   const foodWords = spoken.filter((s) => !NON_FOOD.has(norm(s)));
   const saw = (foodWords.length ? foodWords : spoken).slice(0, 3);
   if (!scored.length) {

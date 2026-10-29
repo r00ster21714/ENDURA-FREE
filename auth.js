@@ -246,6 +246,31 @@ export async function signIn({ email, password }) {
   }
 }
 
+/**
+ * Guarantee a usable access token right now.
+ *
+ * Supabase refreshes on a timer while the page lives, but a phone that was
+ * asleep, or a second tab that rotated the refresh token, can wake up holding
+ * an expired session. Scanning is the one feature that needs the token, so it
+ * asks here first instead of failing with an auth error the user cannot act on.
+ */
+export async function ensureSession({ force = false } = {}) {
+  const c = await getClient();
+  if (!c) return null;
+  let s = auth.session;
+  if (!s) {
+    const { data } = await c.auth.getSession().catch(() => ({ data: null }));
+    s = data?.session || null;
+  }
+  const stale = !s || force || (s.expires_at && s.expires_at * 1000 - Date.now() < 90000);
+  if (stale) {
+    const { data } = await c.auth.refreshSession().catch(() => ({ data: null }));
+    if (data?.session) s = data.session;
+  }
+  auth.session = s || null;
+  return auth.session;
+}
+
 export async function signOut() {
   const c = await getClient();
   auth.busy = true;

@@ -5,7 +5,7 @@ import {
 import { pageHead, macroCard, dateNav, acts } from './common.js';
 import { searchFoods, FOODS, matchVisual } from './data.js';
 import { classify, cloudAnalyze, mergePreds, imageFeatures, CLOUD_LABELS } from './vision.js';
-import { auth } from './auth.js';
+import { auth, ensureSession, signOut } from './auth.js';
 
 /* Scan result: one answer, up to three one-tap alternatives, then the picker.
    The "See all" button only exists when there is more than one candidate, so
@@ -47,12 +47,12 @@ export function render(ctx) {
       <div class="spread">
         <div style="min-width:0">
           <div class="row" style="gap:6px">
-            <span class="badge ${cloudOn ? 'badge--lime' : ''}">${icon('spark')}${cloudOn ? 'Smartest mode' : 'Add a key'}</span>
+            <span class="badge ${cloudOn ? 'badge--lime' : ''}">${icon('spark')}${cloudOn ? 'Smartest mode' : 'Sign in'}</span>
           </div>
           <div style="font-weight:680;font-size:15px;margin-top:7px">Scan a meal</div>
           <div class="tiny muted" style="margin-top:2px;max-width:34ch">${cloudOn
             ? 'The vision model names what is on the plate and estimates the portion.'
-            : 'Scanning turns on once the free key is added in You → Food scanning.'}</div>
+            : 'Your session lapsed — sign in again and scanning resumes. Nothing to paste.'}</div>
         </div>
         <button class="btn btn--primary btn--icon" data-act="scan" aria-label="Scan food" style="width:46px;height:46px">${icon('camera')}</button>
       </div>
@@ -153,7 +153,7 @@ export function openScanner(ctx) {
           <div style="font-weight:650;font-size:14px;margin-bottom:3px">Point at your plate</div>
           <div class="tiny muted" style="max-width:32ch;margin:0 auto 14px">${cloudOn
             ? 'Names every food on the plate and estimates the portion.'
-            : 'Smartest mode needs a free key before it can scan. Add one in You → Food scanning.'}</div>
+            : 'Sign in again to scan — the scanner runs on ENDURA\'s key, nothing to paste.'}</div>
           <div class="row" style="justify-content:center;gap:8px">
             <button class="btn btn--primary" data-shot="camera">${icon('camera')}Camera</button>
             <button class="btn" data-shot="gallery">${icon('upload')}Gallery</button>
@@ -170,7 +170,7 @@ export function openScanner(ctx) {
       <div class="tiny muted" style="line-height:1.45">
         ${cloudOn
           ? `Using <strong>${esc(CLOUD_LABELS[s.cloud.provider] || 'Smartest mode')}</strong>${s.cloud.model ? ' · ' + esc(s.cloud.model) : ''}. The photo goes to the scanning service for the request only, never stored.`
-          : 'Scanning is off until there is a key. Add the free one in You → Food scanning — photos are never stored either way.'}
+          : 'Scanning runs on ENDURA\'s key through your account — sign in again and it works, no key to paste. Photos are never stored.'}
         <button class="btn btn--bare tiny" data-act="vision-settings" style="padding:2px 4px;text-decoration:underline">Change</button>
       </div>
     </div>
@@ -190,10 +190,22 @@ export function openScanner(ctx) {
         if (drop) drop.style.marginBottom = answered || on ? '10px' : '';
       };
 
+      // Smartest mode with no key of its own authenticates with the session,
+      // and a phone that slept can wake with an expired one. Refresh before
+      // asking whether scanning works, so the answer is about the account, not
+      // about a clock.
+      const ready = async () => {
+        const c = state.settings.cloud;
+        if (c.provider === 'gemini' && !c.key) {
+          try { await ensureSession(); } catch { /* offline: scannerOn decides */ }
+        }
+        return scannerOn(state.settings.cloud);
+      };
+
       sheetRoot.querySelectorAll('[data-shot]').forEach((b) => b.addEventListener('click', async () => {
-        // No key means no scan at all: ask for the key before opening the
-        // camera, so nobody picks a photo that can't be read.
-        if (!scannerOn(state.settings.cloud)) {
+        // No usable credential means no scan at all: say so before the camera
+        // opens, so nobody picks a photo that can't be read.
+        if (!(await ready())) {
           showNeedKey(sheetRoot, ctx);
           return;
         }
@@ -209,19 +221,55 @@ export function openScanner(ctx) {
           sheetRoot.querySelector('#scan-preview').classList.remove('hidden');
 
           const cfg = state.settings.cloud;
-          // Cloud first when a key exists: it reads the whole plate, not just a
-          // general label. If the call fails (offline, bad key, rate limit) the
-          // on-device pass still answers and says why.
-          let cloudNote = '';
+          // The cloud pass reads the whole plate and names each component. The
+          // on-device model only recognises a thousand generic objects, so it is
+          // offered as an explicit choice after a failure — it never quietly
+          // answers "soda can" for a plate of food.
+          const runLocal = async () => {
+            status('Loading model…');
+            const crop = centerCrop(full.canvas, 0.74);
+            const tight = centerCrop(full.canvas, 0.5);
+            status('Reading the photo…');
+            // Three passes: the whole frame, the plate area, and a tight centre
+            // crop for close-ups. Agreement between them raises a label's score.
+            const preds = mergePreds([
+              await classify(full.canvas, status),
+              await classify(crop, status),
+              await classify(tight, status),
+            ]);
+            const features = imageFeatures(full.canvas);
+            const match = matchVisual(preds, state.learned, features);
+            if (!match.candidates.length) {
+              showNoMatch(sheetRoot, thumb.dataUrl, match, ctx);
+            } else {
+              showCandidates(sheetRoot, match, thumb.dataUrl, ctx);
+            }
+          };
+
           if (cfg.key || (cfg.provider === 'gemini' && serverScan())) {
             status('Reading the plate…');
             try {
               // Signed in on this project → the photo goes through the app's own
-              // scan function and the Google key stays on the server. The direct
-              // call is the fallback until that function is deployed.
+              // scan function and the Google key stays on the server. The token
+              // is fetched fresh each time and a 401 earns one silent refresh
+              // and retry, so an expired session never reaches the user.
               const sync = state.settings.sync || {};
-              const proxy = { url: sync.url, key: sync.key, token: auth.session?.access_token || '' };
-              const result = await cloudAnalyze(full.dataUrl, cfg, proxy);
+              const attempt = async () => {
+                await ensureSession();
+                return cloudAnalyze(full.dataUrl, state.settings.cloud, {
+                  url: sync.url,
+                  key: sync.key,
+                  token: auth.session?.access_token || '',
+                });
+              };
+              let result;
+              try {
+                result = await attempt();
+              } catch (err) {
+                if (!err || !err.authExpired) throw err;
+                await ensureSession({ force: true });
+                result = await attempt();
+              }
               // Google retired the saved model name mid-flight: keep the one
               // that just answered so the next scan skips the dead name.
               if (result.retired && result.model && result.model !== cfg.model) {
@@ -231,36 +279,25 @@ export function openScanner(ctx) {
               busy(false);
               return;
             } catch (err) {
-              cloudNote = err.message || 'Cloud read failed';
-              status('Cloud read failed — using on-device…');
+              busy(false);
+              // A dead session is an account problem, not a photo problem: say
+              // so plainly instead of showing a guess nobody can trust.
+              if (err && err.authExpired) {
+                showNeedKey(sheetRoot, ctx);
+                return;
+              }
+              showScanError(sheetRoot, err.message || 'Cloud read failed', ctx, {
+                onLocal: async () => {
+                  busy(true);
+                  try { await runLocal(); } catch (e) { showScanError(sheetRoot, e.message || 'Scan failed', ctx); }
+                  busy(false);
+                },
+              });
+              return;
             }
           }
 
-          status('Loading model…');
-          const crop = centerCrop(full.canvas, 0.74);
-          const tight = centerCrop(full.canvas, 0.5);
-          status('Reading the photo…');
-          // Three passes: the whole frame, the plate area, and a tight centre
-          // crop for close-ups. Agreement between them raises a label's score.
-          const preds = mergePreds([
-            await classify(full.canvas, status),
-            await classify(crop, status),
-            await classify(tight, status),
-          ]);
-          const features = imageFeatures(full.canvas);
-          const match = matchVisual(preds, state.learned, features);
-          // Only a frame with nothing recognisable falls back to "pick the
-          // food". Any candidate is named with its macros — a low-confidence
-          // label is still an answer, and the alternatives are one tap away.
-          if (!match.candidates.length) {
-            showNoMatch(sheetRoot, thumb.dataUrl, match, ctx);
-          } else {
-            showCandidates(sheetRoot, match, thumb.dataUrl, ctx);
-          }
-          if (cloudNote) {
-            const box = sheetRoot.querySelector('#scan-result');
-            box.insertAdjacentHTML('afterbegin', `<div class="tiny" style="color:var(--warn);margin-bottom:8px;line-height:1.45">Smartest mode couldn't answer — ${esc(cloudNote)} Showing a basic on-device guess instead.</div>`);
-          }
+          await runLocal();
           busy(false);
         } catch (err) {
           busy(false);
@@ -280,14 +317,15 @@ function showNeedKey(root, ctx) {
   const box = root.querySelector('#scan-result');
   box.innerHTML = `
     <div class="card">
-      <div style="font-weight:650;font-size:14px">Smartest mode needs a sign-in</div>
-      <div class="tiny muted" style="margin-top:4px;line-height:1.45">Scanning runs on ENDURA's own key, so there is nothing to paste — but the scan goes through your account. Sign in again, or add your own free Google key.</div>
-      <button class="btn btn--sm btn--primary btn--block" style="margin-top:12px" data-setup>Open settings</button>
+      <div style="font-weight:650;font-size:14px">Sign in again to scan</div>
+      <div class="tiny muted" style="margin-top:4px;line-height:1.45">Scanning runs on ENDURA's own key, so there is nothing to paste. The scan goes through your account and that session has lapsed — sign in again and it works straight away.</div>
+      <button class="btn btn--sm btn--primary btn--block" style="margin-top:12px" data-signin>Sign in again</button>
       <button class="btn btn--sm btn--ghost btn--block" style="margin-top:6px" data-pick>Pick the food instead</button>
     </div>`;
-  box.querySelector('[data-setup]').addEventListener('click', () => {
+  box.querySelector('[data-signin]').addEventListener('click', async () => {
+    await signOut().catch(() => {});
     closeSheet();
-    ctx.navigate('#/settings');
+    location.reload();
   });
   box.querySelector('[data-pick]').addEventListener('click', () => {
     closeSheet();
@@ -295,18 +333,23 @@ function showNeedKey(root, ctx) {
   });
 }
 
-function showScanError(root, message, ctx) {
+function showScanError(root, message, ctx, opts = {}) {
   const box = root.querySelector('#scan-result');
   box.innerHTML = `
     <div class="card" style="border-color:rgba(255,122,122,.35)">
       <div style="font-weight:650;font-size:14px;color:var(--danger)">Couldn't analyse that photo</div>
       <div class="tiny muted" style="margin-top:4px;line-height:1.45">${esc(message)}</div>
-      <div class="row" style="margin-top:12px;gap:8px">
+      <div class="row" style="margin-top:12px;gap:8px;flex-wrap:wrap">
         <button class="btn btn--sm" data-again>Try again</button>
+        ${opts.onLocal ? '<button class="btn btn--sm btn--ghost" data-local>Basic on-device match</button>' : ''}
         <button class="btn btn--sm btn--ghost" data-manual>Enter manually</button>
       </div>
+      <div class="tiny muted" style="margin-top:8px;line-height:1.4">${opts.onLocal
+        ? 'The on-device match knows common dishes only — it is a fallback, not the scanner.'
+        : 'Nothing was logged and the photo was not kept.'}</div>
     </div>`;
   box.querySelector('[data-again]').addEventListener('click', () => openScanner(ctx));
+  if (opts.onLocal) box.querySelector('[data-local]').addEventListener('click', () => opts.onLocal());
   box.querySelector('[data-manual]').addEventListener('click', () => {
     closeSheet();
     setTimeout(() => openFoodPicker(ctx, { heading: 'Pick the food' }), 40);

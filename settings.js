@@ -235,7 +235,7 @@ export function render(ctx) {
         ${cloud.key || shared
           ? 'The model names every food on the plate and estimates the eaten weight; you adjust the grams before logging. Needs a connection, and the photo is sent for that request only — never stored.'
           : cloud.provider === 'gemini'
-            ? 'Smartest mode needs a signed-in account or a key before it can scan. Sign in, or add the free Google key above: it names each food on the plate and estimates the portion, instead of guessing from a small on-device model. Until then you can still search and pick foods by hand.'
+            ? 'Smartest mode needs your account session, not a key. If scans stop, sign out and back in from this screen — the scanner key itself lives on the server.'
             : `Paste an ${esc(CLOUD_LABELS[cloud.provider] || 'API')} key above to switch scanning on. Until then you can still search and pick foods by hand.`}
       </div>
     </section>

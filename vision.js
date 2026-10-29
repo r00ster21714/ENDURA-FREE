@@ -339,7 +339,10 @@ let proxyState = 'unknown';
    normalising stay here so the server stays a dumb relay. */
 async function viaProxy(dataUrl, model, proxy) {
   const url = String(proxy.url).replace(/\/+$/, '') + '/functions/v1/scan';
-  const t = timeout(30000);
+  // Mobile uploads are slower than desktop: give the proxy function room to
+  // finish its own model chain instead of aborting a call that is about to
+  // answer, then leave the user staring at an on-device guess.
+  const t = timeout(45000);
   let res;
   try {
     res = await fetch(url, {
@@ -362,6 +365,11 @@ async function viaProxy(dataUrl, model, proxy) {
   if (res.status === 404) {
     const e = new Error('Scan proxy not deployed');
     e.proxyMiss = true;
+    throw e;
+  }
+  if (res.status === 401 || res.status === 403) {
+    const e = new Error('Sign-in expired');
+    e.authExpired = true;
     throw e;
   }
   const body = await res.json().catch(() => null);
