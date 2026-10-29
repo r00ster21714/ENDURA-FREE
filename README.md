@@ -112,9 +112,18 @@ before logging. The result is labelled with the model that produced it.
   oil), so a model arithmetic slip cannot log a four-digit snack; macros are scaled with it.
   Ordinary over-estimates are left alone — the weighing discipline in the prompt handles those.
 - Model names are editable, so a newer model can be typed in without a new build.
-- If everything cloud fails — offline, missing session, all models busy — the scanner **falls back to
-  the on-device pass** and says why above the answer instead of dead-ending. That fallback is
-  internal; it is not a mode you pick.
+- **The session heals itself before a scan.** The token is checked and refreshed first (a phone that
+  slept can wake with an expired one), and a 401 gets one silent refresh and retry. If the session is
+  genuinely gone the sheet says *"Sign in again to scan"* with a button — it never asks for an API key,
+  because there is nothing to paste.
+- **A cloud failure no longer quietly becomes a wrong guess.** The old behaviour fell straight through
+  to the 1,000-class on-device model, which answered "soda can" for a plate of food. Now the sheet
+  offers *Try again* and, as a deliberate choice, *Basic on-device match*. When that fallback is used
+  it recognises drink containers too (a can → Soda with Beer next to it, a mug → Coffee with Latte),
+  which it used to discard as tableware.
+- Provider errors are translated before they reach the sheet ("API key not valid" became *the scanner's
+  key was rejected*), and a 429 from the free tier is retried once after 2.5 s instead of surfacing as
+  a failure.
 
 ### Putting the key on a server (scan proxy)
 
