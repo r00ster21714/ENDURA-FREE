@@ -137,6 +137,27 @@ before logging. The result is labelled with the model that produced it.
   offers *Try again* and, as a deliberate choice, *Basic on-device match*. When that fallback is used
   it recognises drink containers too (a can → Soda with Beer next to it, a mug → Coffee with Latte),
   which it used to discard as tableware.
+- **A branded item gets its published number, not a memory.** The model is reliable at *what* is in the
+  photo and how big it is, and weakest at recalling the exact calories of a menu item. So after the
+  estimate is on screen, branded rows (Starbucks, McDonald's, Coke, Monster, Quest …) are looked up on
+  the web in the background: DuckDuckGo's result page is fetched through the keyless `r.jina.ai` reader,
+  and a small text pass pulls out only a figure that is *literally written* in the results. The card
+  stays usable while this happens, and the number is swapped in with its source and sentence quoted
+  under the row — "Published figure from calorieking.com — *There are 140 calories in 1 can (12 fl. oz)
+  of Coca-Cola Classic.*". A drink with no brand gets a **Check the published number** button instead,
+  so a home-made latte is not silently matched to someone else's menu. Verified: grande iced latte 130,
+  grande cappuccino 140, Coca-Cola 330 ml 139-140, Big Mac 580.
+- **A lookup can only replace an estimate, never break one.** The figure is accepted only when the size
+  matches (a chain word like *grande*, or the same volume in oz/ml), the density is possible for the
+  portion (≤1.6 kcal/ml for a drink, ≤9.6 kcal/g for food), it is within 3× of the photo estimate, and
+  the macros still close on 4/4/9 after rescaling. Anything else — a per-100 ml column, a 2 L bottle, a
+  different drink — is discarded and the estimate stands, silently. A failed lookup never shows an
+  error and never blocks *Add*: the worst case is the number the photo already gave.
+- **Nothing about the web lookup needs a key.** `r.jina.ai` and DuckDuckGo's HTML endpoint are open;
+  the only credential involved is the same account token the photo already uses, and the extraction
+  call goes through the same `scan` function, so the Google key stays on the server. It is also the
+  one part of scanning that depends on a third party being up: if the reader or the search endpoint
+  refuses, no number is found and the estimate is what you log.
 - Provider errors are translated before they reach the sheet ("API key not valid" became *the scanner's
   key was rejected*), and a 429 from the free tier is retried once after 2.5 s instead of surfacing as
   a failure.
@@ -491,3 +512,7 @@ physical device.
 - Weigh-ins are one-per-day; logging again overwrites that day's entry.
 - Custom foods are logged but not saved to the food library.
 - Charts are canvas-only; no zoom/scrub.
+- The web lookup depends on two free third-party endpoints (DuckDuckGo's HTML page via `r.jina.ai`), so
+  a lookup can return nothing when they throttle. The estimate is always there as the fallback; a
+  server-side version (Google Search grounding inside the `scan` function) would remove that dependency
+  but needs the function redeployed with a Supabase access token.
